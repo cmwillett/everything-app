@@ -1583,11 +1583,75 @@ import { messaging, adminStats } from './cloud.js';
   window.addEventListener('offline', updateNetBadge);
 
   /* ------------------------------------------------------------- PWA -- */
+  // Updates: look for a new version whenever the app comes back on screen, and
+  // switch to it as soon as it's ready (but never in the middle of typing).
+  var swReg = null;
+  var updating = false;      // a newer version is being installed (not the first install)
+  var updateReady = false;   // it's installed, waiting for you to stop typing
+  var checkingByHand = false;
+
+  // Anything you could be halfway through: any text box, an open editor, a drag.
+  function isBusy() {
+    var a = document.activeElement;
+    // A focused box only counts if there's something in it to lose.
+    var typing = !!a && ((/^(INPUT|TEXTAREA)$/.test(a.tagName) && /^(text|url|email|password|search|)$/.test(a.type || '') && a.value.trim() !== '') ||
+      (a.isContentEditable && a.textContent.trim() !== ''));
+    var draft = ['task-add-name', 'rem-title', 'rem-desc', 'link-add-title', 'link-add-url', 'link-add-notes']
+      .some(function (id) { var f = document.getElementById(id); return f && f.value.trim(); }) ||
+      !!document.querySelector('#task-add-notes .rte-editor:not(:empty)');
+    var openDialog = Array.prototype.some.call(document.querySelectorAll('dialog'), function (d) { return d.open; });
+    return typing || draft || openDialog || !!document.querySelector('.dragging');
+  }
+
+  function applyUpdate() {
+    if (isBusy()) { updateReady = true; return; }
+    updateReady = false;
+    flushAll();
+    location.reload();
+  }
+
+  function checkForUpdate(byHand) {
+    if (!swReg) { if (byHand) toast('Updates aren\u2019t available in this browser'); return Promise.resolve(); }
+    checkingByHand = !!byHand;
+    return swReg.update().then(function () {
+      if (!byHand) return;
+      if (swReg.installing || swReg.waiting) toast('Downloading the new version…');
+      else toast('You\u2019re on the latest version (' + (window.APP_VERSION || '') + ')');
+    }).catch(function () { if (byHand) toast('Couldn\u2019t check — are you online?', true); });
+  }
+
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', function () {
-      navigator.serviceWorker.register('sw.js').catch(function () { /* offline support unavailable */ });
+      // updateViaCache 'none': always fetch sw.js and version.js fresh when checking.
+      navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(function (reg) {
+        swReg = reg;
+        // A new worker arriving while one is already active = an update.
+        reg.addEventListener('updatefound', function () { if (reg.active) updating = true; });
+        checkForUpdate(false);
+      }).catch(function () { /* offline support unavailable */ });
     });
+    navigator.serviceWorker.addEventListener('controllerchange', function () {
+      // The very first install also "changes controller" — that's not an update.
+      if (!updating) return;
+      updating = false;
+      if (checkingByHand) toast('Updating…');
+      applyUpdate();
+    });
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden) checkForUpdate(false);
+    });
+    // Waiting for you to finish: try again when you leave a field, close a
+    // dialog, or put the app in the background.
+    function retryUpdate() { setTimeout(function () { if (updateReady) applyUpdate(); }, 400); }
+    document.addEventListener('focusout', retryUpdate);
+    document.addEventListener('close', retryUpdate, true);
+    document.addEventListener('submit', retryUpdate, true);
+    document.addEventListener('visibilitychange', function () { if (document.hidden) retryUpdate(); });
   }
+  document.getElementById('check-update').addEventListener('click', function () {
+    closeMenu();
+    checkForUpdate(true);
+  });
   var installPrompt = null;
   var installBtn = document.getElementById('install');
   window.addEventListener('beforeinstallprompt', function (e) {

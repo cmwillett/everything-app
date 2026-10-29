@@ -77,8 +77,13 @@ self.addEventListener('fetch', (event) => {
 
   // Our own files: network first so updates show up straight away when
   // online; fall back to the cache when offline.
+  // 'no-cache' makes the browser re-check with GitHub instead of reusing a
+  // copy it saved earlier, so a new version shows up on the next open.
+  const fresh = req.mode === 'navigate'
+    ? fetch(req.url, { cache: 'no-cache', credentials: 'same-origin' })
+    : fetch(req, { cache: 'no-cache' });
   event.respondWith(
-    fetch(req)
+    fresh
       .then((res) => {
         if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(req, copy)); }
         return res;

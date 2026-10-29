@@ -10,7 +10,7 @@ import { messaging, adminStats } from './cloud.js';
   var LABEL_LATER = 'Later';
   var HOME_ROWS = 6;
   var HOME_NOTES = 4;
-  var DEFAULT_DAILY = ['Review Tasks', 'Move any Notes into Tasks if needed'];
+  var DEFAULT_DAILY = ['Make today a GREAT day!', 'Complete today\'s tasks!'];
 
   var state = {
     tasks: [], notes: [], links: [], reminders: [],

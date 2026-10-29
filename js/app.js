@@ -457,9 +457,8 @@ import { messaging, adminStats } from './cloud.js';
     var main = el('div', 'row-main');
     main.appendChild(el('div', 'row-title' + (task.status === 'Done' ? ' is-done' : ''), task.name || '(untitled)'));
     if (task.notes) main.appendChild(mdInto(el('div', 'row-sub md'), task.notes));
-    row.appendChild(main);
 
-    var controls = el('div', 'row-controls');
+    // Status sits under the title, leaving the right-hand side for the buttons.
     var select = el('select', 'status-select');
     select.setAttribute('aria-label', 'Status');
     state.statuses.forEach(function (status) {
@@ -469,25 +468,44 @@ import { messaging, adminStats } from './cloud.js';
       select.appendChild(o);
     });
     select.addEventListener('change', function () { update('tasks', task.id, { status: select.value }); });
-    controls.appendChild(select);
+    var statusRow = el('div', 'row-status');
+    statusRow.appendChild(select);
+    main.appendChild(statusRow);
+    row.appendChild(main);
 
-    var actions = el('div', 'row-actions');
-    var star = iconButton(task.today ? 'Move to ' + LABEL_LATER : 'Move to ' + LABEL_NOW,
-      task.today ? '★' : '☆', function () { update('tasks', task.id, { today: !task.today }); });
-    if (task.today) star.classList.add('is-today');
-    if (task.archived) { star.classList.add('is-blank'); star.tabIndex = -1; star.setAttribute('aria-hidden', 'true'); }
-    actions.appendChild(star);
+    // Icon + word buttons: a column of big targets on phones, a compact icon row on desktop.
+    var actions = el('div', 'task-actions');
+    if (!task.archived) {
+      var star = actionButton(task.today ? 'Move to ' + LABEL_LATER : 'Move to ' + LABEL_NOW,
+        task.today ? '★' : '☆', task.today ? LABEL_NOW : LABEL_NOW,
+        function () { update('tasks', task.id, { today: !task.today }); });
+      if (task.today) star.classList.add('is-on');
+      actions.appendChild(star);
+    }
     // Archiving clears "today" so a restored task comes back to Later.
-    actions.appendChild(iconButton(task.archived ? 'Restore' : 'Archive', task.archived ? '⇧' : '⇩', function () {
-      update('tasks', task.id, task.archived ? { archived: false } : { archived: true, today: false });
-    }));
-    actions.appendChild(iconButton('Edit', '✎', function () { editTask(task.id); }));
-    actions.appendChild(iconButton('Delete', '✕', function () { remove('tasks', task.id, task.name); }, true));
-    controls.appendChild(actions);
-    row.appendChild(controls);
+    actions.appendChild(actionButton(task.archived ? 'Restore' : 'Archive', task.archived ? '⇧' : '⇩',
+      task.archived ? 'Restore' : 'Archive', function () {
+        update('tasks', task.id, task.archived ? { archived: false } : { archived: true, today: false });
+      }));
+    actions.appendChild(actionButton('Edit', '✎', 'Edit', function () { editTask(task.id); }));
+    var del = actionButton('Delete', '✕', 'Delete', function () { remove('tasks', task.id, task.name); });
+    del.classList.add('danger');
+    actions.appendChild(del);
+    row.appendChild(actions);
 
     attachHandle(row, handle, list, '.row', 'tasks', false);
     return row;
+  }
+
+  function actionButton(label, glyph, word, onClick) {
+    var b = el('button', 'act-btn');
+    b.type = 'button';
+    b.title = label;
+    b.setAttribute('aria-label', label);
+    b.appendChild(el('span', 'act-icon', glyph));
+    b.appendChild(el('span', 'act-label', word));
+    b.addEventListener('click', onClick);
+    return b;
   }
 
   function editTask(id) {

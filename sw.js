@@ -2,7 +2,7 @@
  * Offline support. Bump VERSION whenever you change any file listed in ASSETS
  * so installed copies pick up the new code on their next launch.
  */
-const VERSION = 'v7';
+const VERSION = 'v8';
 const CACHE = 'everything-app-' + VERSION;
 const ASSETS = [
   './',
@@ -10,6 +10,7 @@ const ASSETS = [
   './css/styles.css',
   './js/markdown.js',
   './js/richtext.js',
+  './js/appearance.js',
   './js/app.js',
   './js/store.js',
   './js/cloud.js',
@@ -53,6 +54,15 @@ self.addEventListener('fetch', (event) => {
   if (url.origin === 'https://www.gstatic.com' && url.pathname.startsWith('/firebasejs/')) {
     event.respondWith(caches.match(req).then((hit) => hit || fetch(req).then((res) => {
       if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(req, copy)); }
+      return res;
+    })));
+    return;
+  }
+
+  // The optional rounded font: cache first once fetched.
+  if (url.origin === 'https://fonts.googleapis.com' || url.origin === 'https://fonts.gstatic.com') {
+    event.respondWith(caches.match(req).then((hit) => hit || fetch(req).then((res) => {
+      if (res.ok || res.type === 'opaque') { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(req, copy)); }
       return res;
     })));
     return;

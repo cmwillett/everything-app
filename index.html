@@ -5,8 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Everything App</title>
   <meta name="description" content="Tasks, links and notes — Today, Later and a Notebook. Works offline.">
-  <meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#14161a" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f4f5f7">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -14,6 +13,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="Everything">
   <link rel="stylesheet" href="css/styles.css">
+  <script src="js/appearance.js"></script>
 </head>
 <body>
   <div id="boot" class="boot">Loading…</div>
@@ -63,6 +63,7 @@
               <span id="account-email"></span>
             </div>
             <div id="menu-push"></div>
+            <button type="button" id="appearance-open">🎨 Appearance…</button>
             <button type="button" id="export">Export backup (.json)</button>
             <button type="button" id="import">Import backup…</button>
             <button type="button" id="signout" class="danger-text">Sign out</button>
@@ -77,7 +78,7 @@
       <button type="button" class="tab" role="tab" data-tab="tasks">Tasks</button>
       <button type="button" class="tab" role="tab" data-tab="reminders">Reminders</button>
       <button type="button" class="tab" role="tab" data-tab="links">Links</button>
-      <button type="button" class="tab" role="tab" data-tab="notebook">Notebook</button>
+      <button type="button" class="tab" role="tab" data-tab="notebook">Notes</button>
     </nav>
 
     <main>
@@ -97,7 +98,7 @@
           <article class="panel">
             <header class="panel-head">
               <h2>Latest notes</h2>
-              <button type="button" class="link-btn" data-goto="notebook">Go to Notebook</button>
+              <button type="button" class="link-btn" data-goto="notebook">Go to Notes</button>
             </header>
             <div id="home-notes" class="panel-body"></div>
           </article>
@@ -153,13 +154,25 @@
       <!-- ------------------------------------------------------ NOTEBOOK -->
       <section class="view" data-view="notebook">
         <div class="toolbar">
-          <button type="button" class="primary" id="note-add">New note</button>
-          <span class="hint">Notes save automatically. Tap a note to type; the formatting bar appears while you're editing.</span>
+          <button type="button" class="primary" id="note-add">＋ New note</button>
+          <button type="button" class="primary" id="list-add">☑ New list</button>
+          <span class="hint">Everything saves automatically. Tap a note to type; tap a list item to check it off.</span>
         </div>
         <div class="note-grid" id="note-grid"></div>
       </section>
     </main>
   </div>
+
+  <dialog id="appearance" class="appearance-dialog">
+    <div class="dialog-inner">
+      <h2>Appearance</h2>
+      <div id="appearance-body"></div>
+      <footer class="dialog-actions">
+        <button type="button" class="link-btn" id="appearance-reset">Reset to default</button>
+        <button type="button" class="primary" id="appearance-done">Done</button>
+      </footer>
+    </div>
+  </dialog>
 
   <dialog id="editor">
     <div class="dialog-inner">

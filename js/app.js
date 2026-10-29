@@ -354,8 +354,10 @@ import { messaging } from './cloud.js';
     state.notes.slice(0, HOME_NOTES).forEach(function (note) {
       var row = el('button', 'mini mini-note');
       row.type = 'button';
-      row.appendChild(el('div', 'mini-title', note.title || '(untitled note)'));
-      if (String(note.body || '').trim()) row.appendChild(notePreview(note.body));
+      var isList = note.kind === 'list';
+      row.appendChild(el('div', 'mini-title', (isList ? '☑ ' : '') + (note.title || (isList ? '(untitled list)' : '(untitled note)'))));
+      if (isList) row.appendChild(listPreview(note.items || []));
+      else if (String(note.body || '').trim()) row.appendChild(notePreview(note.body));
       row.addEventListener('click', function (e) {
         if (e.target.closest('a')) return;
         showTab('notebook');
@@ -364,6 +366,17 @@ import { messaging } from './cloud.js';
       });
       noteHost.appendChild(row);
     });
+  }
+
+  function listPreview(items) {
+    var box = el('div', 'mini-sub mini-list');
+    var open = items.filter(function (i) { return !i.done && i.text.trim(); });
+    var done = items.filter(function (i) { return i.done; }).length;
+    open.slice(0, 4).forEach(function (i) { box.appendChild(el('div', null, '☐ ' + i.text)); });
+    if (open.length > 4) box.appendChild(el('div', null, '+' + (open.length - 4) + ' more'));
+    if (items.length) box.appendChild(el('div', 'mini-list-count', done + ' of ' + items.length + ' done'));
+    else box.appendChild(el('div', null, 'Empty list'));
+    return box;
   }
 
   function notePreview(body) {
@@ -860,7 +873,7 @@ import { messaging } from './cloud.js';
   /* --------------------------------------------------------- notebook -- */
   function renderNotes() {
     var grid = clear(document.getElementById('note-grid'));
-    if (!state.notes.length) { grid.appendChild(el('p', 'empty', 'No notes yet. Hit "New note".')); return; }
+    if (!state.notes.length) { grid.appendChild(el('p', 'empty', 'Nothing here yet. Start a note or a list.')); return; }
     state.notes.forEach(function (n) { grid.appendChild(noteCard(n, grid)); });
   }
 
@@ -893,10 +906,22 @@ import { messaging } from './cloud.js';
 
     var title = el('input', 'note-title');
     title.type = 'text';
-    title.placeholder = 'Title';
+    title.placeholder = note.kind === 'list' ? 'List name' : 'Title';
     title.value = note.title || '';
     title.addEventListener('input', function () { queueSave(note.id, 'notes', { title: title.value }); });
     card.appendChild(title);
+
+    if (note.kind === 'list') {
+      card.classList.add('is-list');
+      card.appendChild(listBody(note, card));
+      card.addEventListener('focusout', function () {
+        // A redraw briefly removes the focused field; only save once focus has
+        // really left the card.
+        setTimeout(function () { if (!card.contains(document.activeElement)) flushSave(note.id); }, 0);
+      });
+      attachHandle(card, handle, grid, '.note', 'notes', true);
+      return card;
+    }
 
     var body = RichText.create({
       value: note.body,
@@ -907,13 +932,298 @@ import { messaging } from './cloud.js';
     });
     // Save as soon as focus leaves the note (toolbar clicks don't count).
     card.addEventListener('focusout', function (e) {
-      if (!card.contains(e.relatedTarget)) flushSave(note.id);
+      if (card.contains(e.relatedTarget)) return;
+      setTimeout(function () { if (!card.contains(document.activeElement)) flushSave(note.id); }, 0);
     });
     card.appendChild(body.el);
 
     attachHandle(card, handle, grid, '.note', 'notes', true);
     return card;
   }
+
+  /* ----------------------------------------------------------- lists -- */
+  function newItem(text) {
+    return { id: (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random()), text: text || '', done: false };
+  }
+
+  // A checklist inside a note card. Unchecked items first (in their own
+  // order), checked ones below, struck through.
+  function listBody(note, card) {
+    note.items = Array.isArray(note.items) ? note.items : [];
+    var wrap = el('div', 'list-body');
+    var itemsHost = el('div', 'list-items');
+    var footer = el('div', 'list-footer');
+    wrap.appendChild(itemsHost);
+
+    var adder = el('div', 'list-adder');
+    adder.appendChild(el('span', 'list-plus', '＋'));
+    var addInput = el('input', 'list-add-input');
+    addInput.type = 'text';
+    addInput.placeholder = 'Add an item';
+    addInput.setAttribute('enterkeyhint', 'next');
+    adder.appendChild(addInput);
+    wrap.appendChild(adder);
+    wrap.appendChild(footer);
+
+    function save(now) {
+      queueSave(note.id, 'notes', { items: note.items.map(function (i) { return { id: i.id, text: i.text, done: i.done }; }) });
+      if (now) flushSave(note.id);
+    }
+
+    function addFromText(text, afterId) {
+      var lines = String(text).split(/\r?\n/).map(function (l) { return l.replace(/^\s*(?:[-*•]|\[[ xX]?\]|\d+[.)])\s*/, '').trim(); })
+        .filter(Boolean);
+      if (!lines.length) return null;
+      var at = afterId ? note.items.findIndex(function (i) { return i.id === afterId; }) + 1 : note.items.length;
+      var made = lines.map(function (l) { return newItem(l); });
+      note.items.splice.apply(note.items, [at, 0].concat(made));
+      return made[made.length - 1];
+    }
+
+    function draw(focusId, caretEnd) {
+      clear(itemsHost);
+      var open = note.items.filter(function (i) { return !i.done; });
+      var done = note.items.filter(function (i) { return i.done; });
+      open.concat(done).forEach(function (item) { itemsHost.appendChild(itemRow(item)); });
+      clear(footer);
+      if (note.items.length) {
+        footer.appendChild(el('span', 'list-count', done.length + ' of ' + note.items.length + ' done'));
+        if (done.length) {
+          var clr = el('button', 'link-btn', 'Clear checked');
+          clr.type = 'button';
+          clr.addEventListener('click', function () {
+            note.items = note.items.filter(function (i) { return !i.done; });
+            save(true);
+            draw();
+          });
+          footer.appendChild(clr);
+        }
+      }
+      if (focusId) {
+        var f = itemsHost.querySelector('[data-item="' + focusId + '"] .list-text');
+        if (f) { f.focus(); var n = caretEnd === false ? 0 : f.value.length; f.setSelectionRange(n, n); }
+      }
+    }
+
+    function itemRow(item) {
+      var row = el('div', 'list-item' + (item.done ? ' is-done' : ''));
+      row.dataset.item = item.id;
+      var box = document.createElement('input');
+      box.type = 'checkbox';
+      box.checked = item.done;
+      box.setAttribute('aria-label', 'Done');
+      box.addEventListener('change', function () {
+        item.done = box.checked;
+        save(true);
+        row.classList.toggle('is-done', item.done);
+        // Let the tick show for a moment before the item moves.
+        setTimeout(function () { draw(); }, 250);
+      });
+      var text = el('input', 'list-text');
+      text.type = 'text';
+      text.value = item.text;
+      text.setAttribute('enterkeyhint', 'next');
+      text.addEventListener('input', function () { item.text = text.value; save(); });
+      text.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          var made = newItem('');
+          var at = note.items.indexOf(item) + 1;
+          note.items.splice(at, 0, made);
+          save();
+          draw(made.id);
+        } else if (e.key === 'Backspace' && !text.value) {
+          e.preventDefault();
+          var visible = Array.prototype.map.call(itemsHost.querySelectorAll('.list-item'), function (r) { return r.dataset.item; });
+          var prev = visible[visible.indexOf(item.id) - 1];
+          note.items = note.items.filter(function (i) { return i !== item; });
+          save();
+          if (prev) draw(prev); else { draw(); addInput.focus(); }
+        }
+      });
+      text.addEventListener('blur', function () {
+        // Empty items tidy themselves away.
+        if (!item.text.trim() && document.activeElement !== text) {
+          setTimeout(function () {
+            if (card.contains(document.activeElement) && document.activeElement.closest('[data-item="' + item.id + '"]')) return;
+            if (note.items.indexOf(item) === -1 || item.text.trim()) return;
+            note.items = note.items.filter(function (i) { return i !== item; });
+            save();
+            draw(document.activeElement && document.activeElement.closest && document.activeElement.closest('[data-item]')
+              ? document.activeElement.closest('[data-item]').dataset.item : null);
+          }, 0);
+        }
+      });
+      text.addEventListener('paste', function (e) {
+        var t = e.clipboardData && e.clipboardData.getData('text/plain');
+        if (!t || t.indexOf('\n') === -1) return;
+        e.preventDefault();
+        var last = addFromText(t, item.id);
+        if (!item.text.trim()) note.items = note.items.filter(function (i) { return i !== item; });
+        save();
+        draw(last && last.id);
+      });
+      var del = iconButton('Remove item', '✕', function () {
+        note.items = note.items.filter(function (i) { return i !== item; });
+        save(true);
+        draw();
+      });
+      del.classList.add('list-del');
+      row.appendChild(box);
+      row.appendChild(text);
+      row.appendChild(del);
+      return row;
+    }
+
+    addInput.addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      if (!addInput.value.trim()) return;
+      addFromText(addInput.value);
+      addInput.value = '';
+      save();
+      draw();
+      addInput.focus();
+    });
+    addInput.addEventListener('blur', function () {
+      if (!addInput.value.trim()) return;
+      addFromText(addInput.value);
+      addInput.value = '';
+      save();
+      draw();
+    });
+    addInput.addEventListener('paste', function (e) {
+      var t = e.clipboardData && e.clipboardData.getData('text/plain');
+      if (!t || t.indexOf('\n') === -1) return;
+      e.preventDefault();
+      addFromText(t);
+      save();
+      draw();
+      addInput.focus();
+    });
+
+    draw();
+    return wrap;
+  }
+
+  /* ------------------------------------------------------ appearance -- */
+  var appearanceDialog = document.getElementById('appearance');
+  var appearanceSaveTimer = null;
+
+  // Saved with the account so it follows you to your other devices. The colour
+  // picker fires on every drag, so those writes are batched.
+  function saveAppearance(a, batched) {
+    Appearance.apply(a);
+    clearTimeout(appearanceSaveTimer);
+    function commit() { if (currentUid) Store.saveSettings({ appearance: Appearance.get() }); }
+    if (batched) appearanceSaveTimer = setTimeout(commit, 400); else commit();
+  }
+
+  function applySavedAppearance() {
+    var saved = Store.getSettings().appearance;
+    if (saved) Appearance.apply(saved);
+  }
+
+  function segmented(options, value, onPick) {
+    var row = el('div', 'seg');
+    options.forEach(function (o) {
+      var b = el('button', 'seg-btn' + (o.value === value ? ' is-active' : ''));
+      b.type = 'button';
+      if (o.html) b.innerHTML = o.html; else b.textContent = o.label;
+      b.setAttribute('aria-pressed', o.value === value ? 'true' : 'false');
+      if (o.title) b.title = o.title;
+      b.addEventListener('click', function () { onPick(o.value); });
+      row.appendChild(b);
+    });
+    return row;
+  }
+
+  function renderAppearance() {
+    var a = Appearance.get();
+    var host = clear(document.getElementById('appearance-body'));
+    function section(label) {
+      var sec = el('div', 'ap-section');
+      sec.appendChild(el('div', 'ap-label', label));
+      host.appendChild(sec);
+      return sec;
+    }
+    function set(k, v) { var next = Appearance.get(); next[k] = v; saveAppearance(next); renderAppearance(); }
+
+    var themes = el('div', 'ap-themes');
+    Appearance.THEMES.forEach(function (t) {
+      var b = el('button', 'ap-theme' + (t.id === a.theme ? ' is-active' : ''));
+      b.type = 'button';
+      var sw = el('span', 'ap-theme-swatch');
+      sw.style.background = t.swatch[0];
+      var dot = el('span', 'ap-theme-dot');
+      dot.style.background = t.swatch[1];
+      sw.appendChild(dot);
+      b.appendChild(sw);
+      b.appendChild(el('span', null, t.label));
+      // Picking a theme clears a custom accent so the theme shows as designed.
+      b.addEventListener('click', function () {
+        var next = Appearance.get(); next.theme = t.id; next.accent = ''; saveAppearance(next); renderAppearance();
+      });
+      themes.appendChild(b);
+    });
+    section('Theme').appendChild(themes);
+
+    section('Light or dark').appendChild(segmented([
+      { value: 'auto', label: 'Auto', title: 'Follow the phone’s setting' },
+      { value: 'light', label: '☀️ Light' },
+      { value: 'dark', label: '🌙 Dark' }
+    ], a.mode, function (v) { set('mode', v); }));
+
+    var accents = el('div', 'ap-accents');
+    var none = el('button', 'ap-accent ap-accent-none' + (!a.accent ? ' is-active' : ''), 'Theme');
+    none.type = 'button';
+    none.title = 'Use the theme’s own colour';
+    none.addEventListener('click', function () { set('accent', ''); });
+    accents.appendChild(none);
+    Appearance.ACCENTS.forEach(function (hex) {
+      var b = el('button', 'ap-accent' + (a.accent === hex ? ' is-active' : ''));
+      b.type = 'button';
+      b.style.background = hex;
+      b.setAttribute('aria-label', 'Accent ' + hex);
+      b.addEventListener('click', function () { set('accent', hex); });
+      accents.appendChild(b);
+    });
+    var custom = el('label', 'ap-accent ap-accent-custom' + (a.accent && Appearance.ACCENTS.indexOf(a.accent) === -1 ? ' is-active' : ''));
+    custom.title = 'Pick any colour';
+    var picker = document.createElement('input');
+    picker.type = 'color';
+    picker.value = a.accent || '#e0518c';
+    picker.addEventListener('input', function () { var next = Appearance.get(); next.accent = picker.value; saveAppearance(next, true); });
+    picker.addEventListener('change', function () { renderAppearance(); });
+    custom.appendChild(picker);
+    custom.appendChild(el('span', null, '🎨'));
+    accents.appendChild(custom);
+    section('Accent colour').appendChild(accents);
+
+    section('Background').appendChild(segmented([
+      { value: 'plain', label: 'Plain' },
+      { value: 'gradient', label: 'Glow' },
+      { value: 'hearts', label: '♡ Hearts' },
+      { value: 'dots', label: '• Dots' }
+    ], a.bg, function (v) { set('bg', v); }));
+
+    section('Font').appendChild(segmented([
+      { value: 'default', label: 'Standard' },
+      { value: 'rounded', html: '<span style="font-family:Quicksand,ui-rounded,system-ui">Rounded</span>' }
+    ], a.font, function (v) { set('font', v); }));
+  }
+
+  document.getElementById('appearance-open').addEventListener('click', function () {
+    closeMenu();
+    renderAppearance();
+    appearanceDialog.showModal();
+  });
+  document.getElementById('appearance-done').addEventListener('click', function () { appearanceDialog.close(); });
+  document.getElementById('appearance-reset').addEventListener('click', function () {
+    saveAppearance(Appearance.DEFAULTS);
+    renderAppearance();
+  });
+  appearanceDialog.addEventListener('click', function (e) { if (e.target === appearanceDialog) appearanceDialog.close(); });
 
   // One timer per record; fields typed inside the same window accumulate.
   function queueSave(id, table, values) {
@@ -944,7 +1254,8 @@ import { messaging } from './cloud.js';
   }
   function create(table, values) {
     return run('create', table, values).then(function (item) {
-      state[table].unshift(item);
+      // A live update may already have added it; don't show it twice.
+      if (!byId(state[table], item.id)) state[table].unshift(item);
       rerender(table);
       return item;
     }).catch(fail);
@@ -999,6 +1310,7 @@ import { messaging } from './cloud.js';
   /* ------------------------------------------------------------- boot -- */
   function load() {
     pendingRender = false;
+    applySavedAppearance();
     var data = Store.loadAll();
     state.tasks = data.tasks;
     state.notes = data.notes;
@@ -1056,8 +1368,20 @@ import { messaging } from './cloud.js';
     title.focus();
   });
 
+  // New notes start in a colour that suits the chosen theme.
+  function themeNoteColor() {
+    return { blush: 'pink', lavender: 'purple', mint: 'green', sky: 'blue' }[Appearance.get().theme] || state.colors[0];
+  }
+
+  document.getElementById('list-add').addEventListener('click', function () {
+    create('notes', { title: '', kind: 'list', items: [], color: themeNoteColor() }).then(function () {
+      var first = document.querySelector('#note-grid .note .note-title');
+      if (first) first.focus();
+    });
+  });
+
   document.getElementById('note-add').addEventListener('click', function () {
-    create('notes', { title: '', body: '', color: state.colors[0] }).then(function () {
+    create('notes', { title: '', body: '', color: themeNoteColor() }).then(function () {
       var first = document.querySelector('#note-grid .note .note-title');
       if (first) first.focus();
     });
@@ -1235,6 +1559,8 @@ import { messaging } from './cloud.js';
           currentUid = null;
           Store.stop();
           state.tasks = []; state.notes = []; state.links = []; state.reminders = [];
+          if (appearanceDialog.open) appearanceDialog.close();
+          Appearance.reset();
           setAuthMode('signin');
           document.getElementById('auth-password').value = '';
           show('auth');

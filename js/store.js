@@ -19,7 +19,8 @@ const COLORS = ['yellow', 'green', 'blue', 'pink', 'purple', 'grey'];
 
 const TABLES = {
   tasks: { editable: ['name', 'notes', 'status', 'today', 'archived'], booleans: ['today', 'archived'] },
-  notes: { editable: ['title', 'body', 'color'], booleans: [] },
+  // kind: 'note' (rich text body) or 'list' (checklist items).
+  notes: { editable: ['title', 'body', 'color', 'kind', 'items'], booleans: [], lists: ['items'] },
   links: { editable: ['title', 'url', 'category', 'notes'], booleans: [] },
   // status / sentAt are written by the reminder sender (functions/index.js);
   // they're carried through but never set from the edit form.
@@ -51,6 +52,8 @@ function defaultFor(table, field) {
   if (table === 'notes' && field === 'color') return COLORS[0];
   if (table === 'links' && field === 'category') return 'General';
   if ((TABLES[table].numbers || []).indexOf(field) !== -1) return 0;
+  if ((TABLES[table].lists || []).indexOf(field) !== -1) return [];
+  if (table === 'notes' && field === 'kind') return 'note';
   return '';
 }
 
@@ -70,6 +73,9 @@ function sanitize(table, values) {
   config.editable.forEach(function (field) {
     if (values[field] === undefined || values[field] === null) return;
     if (config.booleans.indexOf(field) !== -1) clean[field] = isTrue(values[field]);
+    else if ((config.lists || []).indexOf(field) !== -1) {
+      if (Array.isArray(values[field])) clean[field] = cleanItems(values[field]);
+    }
     else if ((config.numbers || []).indexOf(field) !== -1) {
       const n = Number(values[field]);
       if (Number.isFinite(n)) clean[field] = n;
@@ -77,12 +83,25 @@ function sanitize(table, values) {
     else clean[field] = String(values[field]).slice(0, MAX_FIELD_LENGTH);
   });
   if (table === 'tasks' && clean.status !== undefined && STATUSES.indexOf(clean.status) === -1) clean.status = STATUSES[0];
+  if (table === 'notes' && clean.kind !== undefined && clean.kind !== 'list') clean.kind = 'note';
   if (table === 'notes' && clean.color !== undefined && COLORS.indexOf(clean.color) === -1) clean.color = COLORS[0];
   if (table === 'links') {
     if (clean.url !== undefined) clean.url = normalizeUrl(clean.url);
     if (clean.category !== undefined && !clean.category.trim()) clean.category = 'General';
   }
   return clean;
+}
+
+// Checklist items: [{ id, text, done }], capped so one list can't grow huge.
+function cleanItems(items) {
+  return items.slice(0, 500).map(function (it) {
+    it = it || {};
+    return {
+      id: String(it.id || uuid()).slice(0, 64),
+      text: String(it.text == null ? '' : it.text).slice(0, 1000),
+      done: isTrue(it.done)
+    };
+  });
 }
 
 // A full, clean record from anything (a Firestore doc, a backup row).

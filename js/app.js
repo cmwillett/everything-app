@@ -1357,6 +1357,17 @@ import { messaging, adminStats } from './cloud.js';
       { value: 'dots', label: '• Dots' }
     ], a.bg, function (v) { set('bg', v); }));
 
+    var sizes = segmented([
+      { value: 'small', html: '<span class="size-a" style="font-size:12px">A</span>', title: 'Small' },
+      { value: 'normal', html: '<span class="size-a" style="font-size:15px">A</span>', title: 'Normal' },
+      { value: 'large', html: '<span class="size-a" style="font-size:18px">A</span>', title: 'Large' },
+      { value: 'xlarge', html: '<span class="size-a" style="font-size:22px">A</span>', title: 'Extra large' }
+    ], a.size, function (v) { set('size', v); });
+    sizes.classList.add('seg-size');
+    var sizeSec = section('Text size');
+    sizeSec.appendChild(sizes);
+    sizeSec.appendChild(el('div', 'hint ap-size-name', { small: 'Small', normal: 'Normal', large: 'Large', xlarge: 'Extra large' }[a.size]));
+
     section('Font').appendChild(segmented([
       { value: 'default', label: 'Standard' },
       { value: 'rounded', html: '<span style="font-family:Quicksand,ui-rounded,system-ui">Rounded</span>' }

@@ -119,6 +119,11 @@
   -webkit-mask-size: 22px 22px; mask-size: 22px 22px;
 }
 
+/* Text size — scales the whole interface (text, buttons, tap targets) together. */
+:root[data-size="small"] body { zoom: .9; }
+:root[data-size="large"] body { zoom: 1.15; }
+:root[data-size="xlarge"] body { zoom: 1.3; }
+
 /* Fonts */
 :root[data-font="rounded"] { --font: "Quicksand", ui-rounded, "SF Pro Rounded", "Nunito", system-ui, sans-serif; }
 :root[data-font="rounded"] body { font-weight: 500; }
@@ -725,3 +730,11 @@ input[type="date"], input[type="time"] {
   .act-btn.danger:active { background: var(--danger); color: #fff; }
   .row-status .status-select { font-size: 14px; padding: 7px 10px; }
 }
+
+.seg-size .seg-btn { display: flex; align-items: center; justify-content: center; min-height: 42px; }
+.size-a { font-weight: 700; }
+.ap-size-name { margin-top: 6px; font-size: 12px; }
+/* Pop-up windows scroll when their content is taller than the screen
+   (e.g. at a large text size). */
+dialog { overflow-y: auto; overscroll-behavior: contain; }
+.help-dialog .dialog-inner, .admin-dialog .dialog-inner { max-height: none; overflow: visible; }

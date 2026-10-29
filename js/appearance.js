@@ -10,7 +10,7 @@
   'use strict';
 
   var KEY = 'everything-app:appearance';
-  var DEFAULTS = { theme: 'classic', mode: 'auto', accent: '', bg: 'plain', font: 'default' };
+  var DEFAULTS = { theme: 'classic', mode: 'auto', accent: '', bg: 'plain', font: 'default', size: 'normal' };
 
   // swatch: [page background, accent] used for the picker previews.
   var THEMES = [
@@ -24,6 +24,7 @@
   var MODES = ['auto', 'light', 'dark'];
   var BGS = ['plain', 'gradient', 'hearts', 'dots'];
   var FONTS = ['default', 'rounded'];
+  var SIZES = ['small', 'normal', 'large', 'xlarge'];
   var ACCENTS = ['#e0518c', '#ff6fa8', '#c2185b', '#8758f0', '#b388ff', '#ec6a45', '#f4a261', '#1f9d74', '#2a8ad6', '#2f6fed', '#455a64'];
 
   var current = clean(read());
@@ -45,7 +46,8 @@
       mode: oneOf(a.mode, MODES, DEFAULTS.mode),
       accent: isHex(a.accent) ? a.accent.toLowerCase() : '',
       bg: oneOf(a.bg, BGS, DEFAULTS.bg),
-      font: oneOf(a.font, FONTS, DEFAULTS.font)
+      font: oneOf(a.font, FONTS, DEFAULTS.font),
+      size: oneOf(a.size, SIZES, DEFAULTS.size)
     };
   }
 
@@ -94,6 +96,7 @@
     if (a.bg === 'plain') root.removeAttribute('data-bg'); else root.setAttribute('data-bg', a.bg);
     if (a.font === 'rounded') { root.setAttribute('data-font', 'rounded'); loadRoundedFont(); }
     else root.removeAttribute('data-font');
+    if (a.size === 'normal') root.removeAttribute('data-size'); else root.setAttribute('data-size', a.size);
     updateThemeColor();
     cache(a);
     return a;
@@ -112,7 +115,7 @@
   }
 
   global.Appearance = {
-    THEMES: THEMES, MODES: MODES, BGS: BGS, FONTS: FONTS, ACCENTS: ACCENTS, DEFAULTS: DEFAULTS,
+    THEMES: THEMES, MODES: MODES, BGS: BGS, FONTS: FONTS, SIZES: SIZES, ACCENTS: ACCENTS, DEFAULTS: DEFAULTS,
     get: function () { return JSON.parse(JSON.stringify(current)); },
     apply: apply,
     clean: clean,

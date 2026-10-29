@@ -459,12 +459,17 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
 .dialog-inner .rte-editor { max-height: 50vh; overflow-y: auto; }
 @media (max-width: 600px) {
   .rte-editor { font-size: 16px; }
-  .rte-btn { min-width: 36px; height: 36px; }
+  .rte-toolbar { gap: 0; flex-wrap: nowrap; overflow-x: auto; }
+  .rte-btn { min-width: 30px; height: 36px; padding: 0 3px; flex: none; }
+  .rte-sep { margin: 0 3px; flex: none; }
 }
 
 /* reminders */
-.rem-form { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; box-shadow: var(--shadow); }
-.rem-form > input[type="text"] { font-weight: 500; }
+.card-form { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; box-shadow: var(--shadow); }
+.form-actions { display: flex; align-items: center; justify-content: flex-end; gap: 14px; flex-wrap: wrap; }
+.form-actions .check { margin-right: auto; }
+.form-actions .primary { min-width: 120px; min-height: 40px; }
+.card-form > input[type="text"] { font-weight: 500; }
 .rem-when { align-items: flex-end; }
 .rem-field { display: flex; flex-direction: column; gap: 4px; flex: 1 1 140px; font-size: 12px; color: var(--text-dim); }
 input[type="date"], input[type="time"] {
@@ -495,6 +500,8 @@ input[type="date"], input[type="time"] {
 @keyframes pulse { 50% { box-shadow: 0 0 0 4px var(--accent); } }
 @media (max-width: 600px) {
   .rem-when .primary { flex: 1 1 100%; }
+  .form-actions .primary { flex: 1 1 100%; min-height: 44px; }
+  .form-actions .check { padding: 2px 0; }
   input[type="date"], input[type="time"] { font-size: 16px; }
   .tabs .tab { font-size: 12px; padding: 11px 2px; }
 }

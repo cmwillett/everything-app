@@ -2,7 +2,7 @@
  * Offline support. Bump VERSION whenever you change any file listed in ASSETS
  * so installed copies pick up the new code on their next launch.
  */
-const VERSION = 'v5';
+const VERSION = 'v6';
 const CACHE = 'everything-app-' + VERSION;
 const ASSETS = [
   './',

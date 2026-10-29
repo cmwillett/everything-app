@@ -105,13 +105,13 @@
 
       <!-- --------------------------------------------------------- TASKS -->
       <section class="view" data-view="tasks">
-        <form class="quick-add" id="task-add">
-          <div class="quick-add-row">
-            <input type="text" id="task-add-name" placeholder="Task name" autocomplete="off" enterkeyhint="done">
-            <label class="check"><input type="checkbox" id="task-add-today"> Add to Today</label>
-            <button type="submit" class="primary">Add</button>
-          </div>
+        <form class="quick-add card-form" id="task-add">
+          <input type="text" id="task-add-name" placeholder="Task name" autocomplete="off" enterkeyhint="done">
           <div id="task-add-notes"></div>
+          <div class="form-actions">
+            <label class="check"><input type="checkbox" id="task-add-today"> Add to Today</label>
+            <button type="submit" class="primary">Add task</button>
+          </div>
         </form>
         <div class="filters" id="task-filters"></div>
         <div id="task-list"></div>
@@ -120,7 +120,7 @@
       <!-- ----------------------------------------------------- REMINDERS -->
       <section class="view" data-view="reminders">
         <div id="push-banner"></div>
-        <form class="quick-add rem-form" id="rem-add" novalidate>
+        <form class="quick-add card-form rem-form" id="rem-add" novalidate>
           <input type="text" id="rem-title" placeholder="Remind me to…" autocomplete="off" enterkeyhint="next">
           <textarea id="rem-desc" class="quick-add-notes is-short" placeholder="Details (optional)"></textarea>
           <div class="quick-add-row rem-when">
@@ -134,15 +134,17 @@
 
       <!-- --------------------------------------------------------- LINKS -->
       <section class="view" data-view="links">
-        <form class="quick-add" id="link-add" novalidate>
+        <form class="quick-add card-form" id="link-add" novalidate>
           <div class="quick-add-row">
             <input type="text" id="link-add-title" placeholder="Label" autocomplete="off">
             <input type="url" id="link-add-url" placeholder="URL" autocomplete="off" inputmode="url" autocapitalize="off">
             <input type="text" id="link-add-category" placeholder="Category" autocomplete="off" list="link-categories">
             <datalist id="link-categories"></datalist>
-            <button type="submit" class="primary">Add</button>
           </div>
           <textarea id="link-add-notes" class="quick-add-notes is-short" placeholder="Description (optional)"></textarea>
+          <div class="form-actions">
+            <button type="submit" class="primary">Add link</button>
+          </div>
         </form>
         <div id="link-groups"></div>
       </section>

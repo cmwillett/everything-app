@@ -13,7 +13,7 @@
 import { connect, configured } from './cloud.js';
 
 const LEGACY_KEY = 'everything-app:v1';
-const MAX_FIELD_LENGTH = 20000;
+const MAX_FIELD_LENGTH = 100000;   // rich text is stored as HTML, which is wordier
 const STATUSES = ['To Do', 'In Progress', 'Blocked', 'Done'];
 const COLORS = ['yellow', 'green', 'blue', 'pink', 'purple', 'grey'];
 

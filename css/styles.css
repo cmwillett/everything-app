@@ -408,3 +408,56 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
   padding: 4px 9px; border-radius: 999px; background: rgba(127,127,127,.18); color: var(--text-dim);
 }
 @media (max-width: 600px) { .auth-card input { font-size: 16px; } }
+
+/* rich text editor */
+.rte {
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface);
+  display: flex; flex-direction: column;
+}
+.rte:focus-within { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+.rte-toolbar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 2px;
+  padding: 4px; border-bottom: 1px solid var(--border);
+}
+.rte-btn {
+  min-width: 30px; height: 30px; padding: 0 6px; border: 0; border-radius: 6px;
+  background: none; color: var(--text-dim); font-size: 14px; line-height: 1;
+  display: inline-grid; place-items: center;
+}
+.rte-btn:hover { background: var(--surface-2); color: var(--text); }
+.rte-btn.is-on { background: var(--accent-soft); color: var(--accent); }
+.rte-btn:disabled { opacity: .3; }
+.rte-btn b, .rte-btn i, .rte-btn u, .rte-btn s { font-family: Georgia, "Times New Roman", serif; font-size: 15px; }
+.rte-clear { font-family: Georgia, serif; font-size: 14px; }
+.rte-clear sub { font-size: 9px; }
+.rte-sep { width: 1px; height: 18px; background: var(--border); margin: 0 4px; }
+.rte-editor {
+  padding: 9px 11px; min-height: 80px; outline: none; overflow-wrap: anywhere;
+  cursor: text; -webkit-user-select: text; user-select: text;
+}
+.rte-editor:empty::before { content: attr(data-placeholder); color: var(--text-dim); pointer-events: none; }
+.rte-editor li > p, .md li > p { margin: 0; }
+.rte-editor u, .md u { text-underline-offset: 2px; }
+.rte-editor blockquote, .md blockquote { margin: 0 0 6px; padding-left: 10px; border-left: 3px solid var(--border); color: var(--text-dim); }
+
+/* toolbar only while editing (notebook cards) */
+.rte-toolbar-on-focus .rte-toolbar { display: none; }
+.rte-toolbar-on-focus:focus-within .rte-toolbar { display: flex; }
+
+/* inside a sticky note the editor blends into the card */
+.note .note-rte { border: 0; border-radius: 0; background: transparent; flex: 1; }
+.note .note-rte:focus-within { outline: 0; background: rgba(255, 255, 255, .22); }
+.note .note-rte .rte-toolbar { border-bottom-color: rgba(0, 0, 0, .08); }
+.note .note-rte .rte-editor { flex: 1; min-height: 140px; padding: 9px 12px; }
+.note .rte-btn:hover { background: rgba(0, 0, 0, .06); }
+.note .rte-btn { min-width: 26px; padding: 0 4px; }
+.note .rte-sep { margin: 0 2px; }
+@media (prefers-color-scheme: dark) {
+  .note .note-rte:focus-within { background: rgba(255, 255, 255, .05); }
+  .note .rte-btn:hover { background: rgba(255, 255, 255, .08); }
+}
+.dialog-inner .rte-editor { max-height: 50vh; overflow-y: auto; }
+@media (max-width: 600px) {
+  .rte-editor { font-size: 16px; }
+  .rte-btn { min-width: 36px; height: 36px; }
+}

@@ -2,13 +2,14 @@
  * Offline support. Bump VERSION whenever you change any file listed in ASSETS
  * so installed copies pick up the new code on their next launch.
  */
-const VERSION = 'v3';
+const VERSION = 'v4';
 const CACHE = 'everything-app-' + VERSION;
 const ASSETS = [
   './',
   './index.html',
   './css/styles.css',
   './js/markdown.js',
+  './js/richtext.js',
   './js/app.js',
   './js/store.js',
   './js/cloud.js',

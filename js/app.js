@@ -55,53 +55,16 @@ import { Store } from './store.js';
     for (var i = 0; i < list.length; i++) if (list[i].id === item.id) { list[i] = item; return; }
     list.push(item);
   }
-  function mdInto(node, text) { node.innerHTML = Markdown.render(text); return node; }
+  // Saved notes are rich text (HTML); RichText cleans them before showing.
+  function mdInto(node, text) { return RichText.renderInto(node, text); }
   function dayKey() {
     var d = new Date();
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' +
       String(d.getDate()).padStart(2, '0');
   }
 
-  /* ---------------------------------------------------- editing keys -- */
-  // Tab indents inside a markdown field rather than moving focus.
-  function enableIndentKeys(field) {
-    var INDENT = Markdown.INDENT;
-    field.addEventListener('keydown', function (event) {
-      if (event.key === 'Escape') { field.blur(); return; }
-      if (event.key !== 'Tab' || event.altKey || event.ctrlKey || event.metaKey) return;
-      event.preventDefault();
-      var value = field.value;
-      var from = value.lastIndexOf('\n', field.selectionStart - 1) + 1;
-      var to = value.indexOf('\n', field.selectionEnd);
-      if (to === -1) to = value.length;
-      var head = 0, total = 0;
-      var lines = value.slice(from, to).split('\n').map(function (line, i) {
-        var shift;
-        if (event.shiftKey) {
-          var lead = /^ {1,2}/.exec(line);
-          shift = lead ? -lead[0].length : 0;
-          line = lead ? line.slice(lead[0].length) : line;
-        } else {
-          shift = INDENT.length;
-          line = INDENT + line;
-        }
-        if (i === 0) head = shift;
-        total += shift;
-        return line;
-      });
-      var start = field.selectionStart, end = field.selectionEnd;
-      replaceRange(field, from, to, lines.join('\n'));
-      field.setSelectionRange(Math.max(from, start + head), Math.max(from, end + total));
-    });
-  }
-  function replaceRange(field, from, to, text) {
-    if (document.activeElement === field && document.execCommand) {
-      field.setSelectionRange(from, to);
-      if (document.execCommand('insertText', false, text)) return;
-    }
-    field.value = field.value.slice(0, from) + text + field.value.slice(to);
-    field.dispatchEvent(new Event('input', { bubbles: true }));
-  }
+  /* ------------------------------------------------------- keyboard -- */
+  // Ctrl/⌘+Enter submits a form, since plain Enter adds a new line in details.
   function submitOnCmdEnter(form) {
     form.addEventListener('keydown', function (event) {
       if (event.key !== 'Enter' || !(event.metaKey || event.ctrlKey)) return;
@@ -109,24 +72,6 @@ import { Store } from './store.js';
       if (form.requestSubmit) form.requestSubmit();
       else form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
     });
-  }
-
-  var MD_SAMPLES = [
-    ['**bold**', 'bold text'], ['*italic*', 'italic text'], ['~~strike~~', 'strikethrough'],
-    ['`code`', 'inline code'], ['[label](https://example.com)', 'link'],
-    ['- item', 'bullet list'], ['  - item', 'sub-bullet — Tab to indent, Shift+Tab to undo'],
-    ['1. item', 'numbered list'], ['# Heading', 'heading (## and ### are smaller)']
-  ];
-  function markdownHelp() {
-    var box = el('details', 'md-help');
-    box.appendChild(el('summary', null, 'Markdown cheat sheet'));
-    var grid = el('div', 'md-help-grid');
-    MD_SAMPLES.forEach(function (s) {
-      grid.appendChild(el('code', null, s[0]));
-      grid.appendChild(el('span', null, s[1]));
-    });
-    box.appendChild(grid);
-    return box;
   }
 
   /* ------------------------------------------------------------- tabs -- */
@@ -152,7 +97,9 @@ import { Store } from './store.js';
   var dialogForm = document.getElementById('editor-form');
   var pendingSave = null;
 
+  var richFields = {};
   function openEditor(title, fields, onSave) {
+    richFields = {};
     document.getElementById('editor-title').textContent = title;
     var host = clear(document.getElementById('editor-fields'));
     fields.forEach(function (field) {
@@ -161,6 +108,16 @@ import { Store } from './store.js';
       label.setAttribute('for', 'f-' + field.name);
       wrap.appendChild(label);
       var input;
+      if (field.type === 'rich') {
+        var rte = RichText.create({ value: field.value, placeholder: field.placeholder || '', minHeight: 140 });
+        rte.editor.id = 'f-' + field.name;
+        rte.el.dataset.richName = field.name;
+        richFields[field.name] = rte;
+        wrap.appendChild(rte.el);
+        if (field.hint) wrap.appendChild(el('div', 'hint', field.hint));
+        host.appendChild(wrap);
+        return;
+      }
       if (field.type === 'textarea') input = el('textarea');
       else if (field.type === 'select') {
         input = el('select');
@@ -170,13 +127,12 @@ import { Store } from './store.js';
       input.name = field.name;
       input.value = field.value == null ? '' : field.value;
       wrap.appendChild(input);
-      if (field.markdown) { enableIndentKeys(input); wrap.appendChild(markdownHelp()); }
       if (field.hint) wrap.appendChild(el('div', 'hint', field.hint));
       host.appendChild(wrap);
     });
     pendingSave = onSave;
     dialog.showModal();
-    var first = host.querySelector('input, textarea, select');
+    var first = host.querySelector('input, textarea, select, [contenteditable]');
     if (first) first.focus();
   }
   submitOnCmdEnter(dialogForm);
@@ -184,6 +140,7 @@ import { Store } from './store.js';
     event.preventDefault();
     var values = {};
     dialogForm.querySelectorAll('[name]').forEach(function (i) { values[i.name] = i.value; });
+    Object.keys(richFields).forEach(function (k) { values[k] = richFields[k].getValue(); });
     var handler = pendingSave;
     pendingSave = null;
     dialog.close();
@@ -523,7 +480,7 @@ import { Store } from './store.js';
     if (!task) return;
     openEditor('Edit task', [
       { name: 'name', label: 'Task name', value: task.name },
-      { name: 'notes', label: 'Notes', type: 'textarea', value: task.notes, markdown: true },
+      { name: 'notes', label: 'Details', type: 'rich', value: task.notes, placeholder: 'Add details…' },
       { name: 'status', label: 'Status', type: 'select', options: state.statuses, value: task.status }
     ], function (values) { update('tasks', id, values); });
   }
@@ -642,30 +599,18 @@ import { Store } from './store.js';
     title.addEventListener('input', function () { queueSave(note.id, 'notes', { title: title.value }); });
     card.appendChild(title);
 
-    var preview = el('div', 'note-md md');
-    var body = el('textarea', 'note-body');
-    body.placeholder = 'Write something…';
-    body.value = note.body || '';
-    function showPreview() {
-      if (body.value.trim()) mdInto(preview, body.value);
-      else clear(preview).appendChild(el('span', 'md-placeholder', 'Write something…'));
-      preview.hidden = false;
-      body.hidden = true;
-    }
-    function showEditor() {
-      preview.hidden = true;
-      body.hidden = false;
-      body.focus();
-      body.setSelectionRange(body.value.length, body.value.length);
-    }
-    preview.addEventListener('click', function (e) { if (e.target.closest('a')) return; showEditor(); });
-    body.addEventListener('input', function () { queueSave(note.id, 'notes', { body: body.value }); });
-    body.addEventListener('blur', function () { flushSave(note.id); showPreview(); });
-    title.addEventListener('blur', function () { flushSave(note.id); });
-    enableIndentKeys(body);
-    card.appendChild(preview);
-    card.appendChild(body);
-    showPreview();
+    var body = RichText.create({
+      value: note.body,
+      placeholder: 'Write something…',
+      toolbar: 'focus',
+      className: 'note-rte',
+      onInput: function (html) { queueSave(note.id, 'notes', { body: html }); }
+    });
+    // Save as soon as focus leaves the note (toolbar clicks don't count).
+    card.addEventListener('focusout', function (e) {
+      if (!card.contains(e.relatedTarget)) flushSave(note.id);
+    });
+    card.appendChild(body.el);
 
     attachHandle(card, handle, grid, '.note', 'notes', true);
     return card;
@@ -773,20 +718,19 @@ import { Store } from './store.js';
   window.addEventListener('hashchange', function () { showTab(location.hash.slice(1), true); });
 
   var taskForm = document.getElementById('task-add');
-  var taskNotes = document.getElementById('task-add-notes');
+  var taskNotes = RichText.create({ placeholder: 'Details (optional)', minHeight: 70, className: 'quick-add-rte' });
+  document.getElementById('task-add-notes').appendChild(taskNotes.el);
   var taskToday = document.getElementById('task-add-today');
   taskToday.parentNode.lastChild.textContent = ' Add to ' + LABEL_NOW;
-  enableIndentKeys(taskNotes);
   submitOnCmdEnter(taskForm);
-  document.getElementById('task-add-help').appendChild(markdownHelp());
   taskForm.addEventListener('submit', function (event) {
     event.preventDefault();
     var input = document.getElementById('task-add-name');
     var name = input.value.trim();
     if (!name) { input.focus(); return; }
-    create('tasks', { name: name, notes: taskNotes.value.trim(), status: state.statuses[0], today: taskToday.checked });
+    create('tasks', { name: name, notes: taskNotes.getValue(), status: state.statuses[0], today: taskToday.checked });
     input.value = '';
-    taskNotes.value = '';
+    taskNotes.setValue('');
     input.focus();
   });
 
@@ -816,7 +760,6 @@ import { Store } from './store.js';
       if (first) first.focus();
     });
   });
-  document.getElementById('note-help').appendChild(markdownHelp());
 
   document.getElementById('export').addEventListener('click', exportBackup);
   document.getElementById('import').addEventListener('click', function () {
@@ -846,7 +789,7 @@ import { Store } from './store.js';
     if (dialog.open) return true;
     // Only fields inside the redrawn lists count; the add forms are static.
     var a = document.activeElement;
-    if (!a || !/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return false;
+    if (!a || !(/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) || a.isContentEditable)) return false;
     return !!a.closest('#task-list, #link-groups, #note-grid, #home-tasks, #home-notes, #daily-tasks');
   }
   function scheduleRender() {

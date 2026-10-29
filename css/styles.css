@@ -698,31 +698,30 @@ input[type="date"], input[type="time"] {
   .admin-stats { grid-template-columns: 1fr 1fr; }
 }
 
-/* task action buttons */
+/* task action buttons — labeled buttons everywhere; a row on wide screens,
+   a column down the right on phones */
 .row-status { margin-top: 6px; }
-.task-actions { display: flex; gap: 2px; flex-shrink: 0; align-self: flex-start; }
+.task-actions { display: flex; gap: 6px; flex-shrink: 0; align-self: flex-start; flex-wrap: wrap; justify-content: flex-end; }
 .act-btn {
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  background: none; border: 0; color: var(--text-dim); border-radius: 6px;
-  min-width: 30px; min-height: 30px; padding: 4px 7px; line-height: 1;
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 34px; padding: 0 12px;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+  border-radius: 9px; font-size: 13px; font-weight: 500; line-height: 1; white-space: nowrap;
 }
-.act-btn:hover { background: var(--surface-2); color: var(--text); }
-.act-btn.is-on { color: var(--accent); }
-.act-btn.danger:hover { background: var(--danger); color: #fff; }
-.act-label { display: none; }
+.act-btn:hover { border-color: var(--accent); color: var(--accent); }
+.act-icon { width: 16px; text-align: center; font-size: 14px; }
+.act-btn.is-on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.act-btn.danger { color: var(--danger); }
+.act-btn.danger:hover { background: var(--danger); border-color: var(--danger); color: #fff; }
 @media (max-width: 600px) {
   .row:has(.task-actions) { flex-wrap: nowrap; align-items: stretch; }
   .row:has(.task-actions) .row-main { flex: 1 1 auto; }
-  .task-actions { flex-direction: column; gap: 6px; width: 100px; }
-  .act-btn {
-    justify-content: flex-start; width: 100%; min-height: 40px; padding: 0 10px;
-    border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
-    border-radius: 9px; font-size: 13.5px; font-weight: 500;
-  }
-  .act-icon { width: 16px; text-align: center; font-size: 15px; }
-  .act-label { display: inline; }
-  .act-btn.is-on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
-  .act-btn.danger { color: var(--danger); }
+  .task-actions { flex-direction: column; flex-wrap: nowrap; width: 100px; }
+  .act-btn { width: 100%; min-height: 40px; padding: 0 10px; font-size: 13.5px; }
+  .act-icon { font-size: 15px; }
+  .act-btn:hover { border-color: var(--border); color: inherit; }
+  .act-btn.is-on:hover { border-color: var(--accent); color: var(--accent); }
+  .act-btn.danger:hover { background: var(--surface-2); color: var(--danger); }
   .act-btn.danger:active { background: var(--danger); color: #fff; }
   .row-status .status-select { font-size: 14px; padding: 7px 10px; }
 }

@@ -1,218 +1,303 @@
 /*
- * Local data store — the stand-in for the Google Sheet.
+ * Data store, backed by Cloud Firestore.
  *
- * Same shape as the Apps Script API (create / update / remove / reorder per
- * table) so app.js reads almost exactly like the original. Everything lives in
- * the browser's localStorage under one key, which means:
- *   - it works fully offline and needs no server or account;
- *   - data is per device + per browser. Use Data → Export / Import to move it
- *     or back it up.
- * If you later want sync, this is the only file that needs to change.
+ * Layout:  users/{uid}/tasks/{id}, users/{uid}/notes/{id},
+ *          users/{uid}/links/{id}, users/{uid}/meta/settings
+ * Each person only ever sees their own users/{uid} — see firestore.rules.
+ *
+ * app.js talks to a local mirror that is kept up to date by live listeners.
+ * Writes update the mirror straight away and go to Firestore in the
+ * background, so the UI never waits on the network and keeps working
+ * offline (Firestore queues the writes and sends them when it can).
  */
-(function (global) {
-  'use strict';
+import { connect, configured } from './cloud.js';
 
-  var KEY = 'everything-app:v1';
-  var MAX_FIELD_LENGTH = 20000;
+const LEGACY_KEY = 'everything-app:v1';
+const MAX_FIELD_LENGTH = 20000;
+const STATUSES = ['To Do', 'In Progress', 'Blocked', 'Done'];
+const COLORS = ['yellow', 'green', 'blue', 'pink', 'purple', 'grey'];
 
-  var STATUSES = ['To Do', 'In Progress', 'Blocked', 'Done'];
-  var COLORS = ['yellow', 'green', 'blue', 'pink', 'purple', 'grey'];
+const TABLES = {
+  tasks: { editable: ['name', 'notes', 'status', 'today', 'archived'], booleans: ['today', 'archived'] },
+  notes: { editable: ['title', 'body', 'color'], booleans: [] },
+  links: { editable: ['title', 'url', 'category', 'notes'], booleans: [] }
+};
+const TABLE_NAMES = Object.keys(TABLES);
 
-  var TABLES = {
-    tasks: {
-      editable: ['name', 'notes', 'status', 'today', 'archived'],
-      booleans: ['today', 'archived']
-    },
-    notes: {
-      editable: ['title', 'body', 'color'],
-      booleans: []
-    },
-    links: {
-      editable: ['title', 'url', 'category', 'notes'],
-      booleans: []
-    }
+let fb = null;            // { auth, db, a: authModule, f: firestoreModule }
+let uid = null;
+let mirror = empty();
+let settings = {};
+let unsubs = [];
+let changeHandler = function () {};
+let errorHandler = function (e) { console.error(e); };
+
+function empty() { return { tasks: [], notes: [], links: [] }; }
+function uuid() {
+  if (crypto && crypto.randomUUID) return crypto.randomUUID();
+  return 'id-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+}
+function clone(o) { return JSON.parse(JSON.stringify(o)); }
+function isTrue(v) { return v === true || String(v).toLowerCase() === 'true'; }
+function assertTable(t) { if (!TABLES[t]) throw new Error('Unknown table: ' + t); }
+function assertSignedIn() { if (!uid) throw new Error('Not signed in.'); }
+
+function defaultFor(table, field) {
+  if (TABLES[table].booleans.indexOf(field) !== -1) return false;
+  if (table === 'tasks' && field === 'status') return STATUSES[0];
+  if (table === 'notes' && field === 'color') return COLORS[0];
+  if (table === 'links' && field === 'category') return 'General';
+  return '';
+}
+
+// Anything that isn't plainly http(s) is dropped, so a stored
+// "javascript:" value can never become a live link.
+function normalizeUrl(raw) {
+  const url = String(raw).trim();
+  if (!url) return '';
+  if (/^https?:\/\//i.test(url)) return url;
+  if (/^[a-z][a-z0-9+.\-]*:/i.test(url)) return '';
+  return 'https://' + url;
+}
+
+function sanitize(table, values) {
+  const config = TABLES[table];
+  const clean = {};
+  config.editable.forEach(function (field) {
+    if (values[field] === undefined || values[field] === null) return;
+    if (config.booleans.indexOf(field) !== -1) clean[field] = isTrue(values[field]);
+    else clean[field] = String(values[field]).slice(0, MAX_FIELD_LENGTH);
+  });
+  if (table === 'tasks' && clean.status !== undefined && STATUSES.indexOf(clean.status) === -1) clean.status = STATUSES[0];
+  if (table === 'notes' && clean.color !== undefined && COLORS.indexOf(clean.color) === -1) clean.color = COLORS[0];
+  if (table === 'links') {
+    if (clean.url !== undefined) clean.url = normalizeUrl(clean.url);
+    if (clean.category !== undefined && !clean.category.trim()) clean.category = 'General';
+  }
+  return clean;
+}
+
+// A full, clean record from anything (a Firestore doc, a backup row).
+function normalizeRecord(table, row, fallbackOrder) {
+  const clean = sanitize(table, row || {});
+  const now = new Date().toISOString();
+  const rec = {
+    id: String(row.id || uuid()),
+    sortOrder: Number.isFinite(Number(row.sortOrder)) ? Number(row.sortOrder) : (fallbackOrder || 0),
+    created: String(row.created || now),
+    updated: String(row.updated || now)
   };
-  var TABLE_NAMES = Object.keys(TABLES);
+  TABLES[table].editable.forEach(function (f) { rec[f] = clean[f] === undefined ? defaultFor(table, f) : clean[f]; });
+  return rec;
+}
 
-  function uuid() {
-    if (global.crypto && crypto.randomUUID) return crypto.randomUUID();
-    return 'id-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+function sorted(table) { return mirror[table].slice().sort(function (a, b) { return a.sortOrder - b.sortOrder; }); }
+
+/* ------------------------------------------------------- firestore -- */
+function col(table) { return fb.f.collection(fb.db, 'users', uid, table); }
+function ref(table, id) { return fb.f.doc(fb.db, 'users', uid, table, id); }
+function settingsRef() { return fb.f.doc(fb.db, 'users', uid, 'meta', 'settings'); }
+function body(rec) { const o = Object.assign({}, rec); delete o.id; return o; }
+
+// Writes are fire-and-forget: offline they wait in Firestore's queue, and a
+// rejection (e.g. rules) is reported rather than thrown at the caller.
+function send(promise) { promise.catch(function (e) { errorHandler(e); }); }
+
+async function commitInBatches(ops) {
+  for (let i = 0; i < ops.length; i += 400) {
+    const batch = fb.f.writeBatch(fb.db);
+    ops.slice(i, i + 400).forEach(function (op) { op(batch); });
+    await batch.commit();
   }
+}
 
-  function empty() { return { tasks: [], notes: [], links: [] }; }
+/* ----------------------------------------------------------- legacy -- */
+// Data saved by the earlier, device-only version of the app.
+function legacyData() {
+  try {
+    const raw = localStorage.getItem(LEGACY_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    const out = empty();
+    let count = 0;
+    TABLE_NAMES.forEach(function (t) { if (Array.isArray(data[t])) { out[t] = data[t]; count += data[t].length; } });
+    return count ? { data: out, count: count } : null;
+  } catch (e) { return null; }
+}
 
-  function read() {
-    try {
-      var raw = localStorage.getItem(KEY);
-      if (!raw) return empty();
-      var data = JSON.parse(raw);
-      var out = empty();
-      TABLE_NAMES.forEach(function (t) { if (Array.isArray(data[t])) out[t] = data[t]; });
-      return out;
-    } catch (e) {
-      return empty();
-    }
-  }
+export const Store = {
+  STATUSES, COLORS, configured,
 
-  var db = read();
+  /* ---- auth ---- */
+  async init() { fb = await connect(); return fb; },
 
-  function persist() {
-    try {
-      localStorage.setItem(KEY, JSON.stringify(db));
-    } catch (e) {
-      throw new Error('Could not save — browser storage is full or disabled.');
-    }
-  }
+  onAuth(handler) {
+    return fb.a.onAuthStateChanged(fb.auth, handler);
+  },
+  signInWithGoogle() {
+    const provider = new fb.a.GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
+    return fb.a.signInWithPopup(fb.auth, provider);
+  },
+  signInWithEmail(email, password) { return fb.a.signInWithEmailAndPassword(fb.auth, email, password); },
+  createAccount(email, password) { return fb.a.createUserWithEmailAndPassword(fb.auth, email, password); },
+  resetPassword(email) { return fb.a.sendPasswordResetEmail(fb.auth, email); },
+  signOut() { return fb.a.signOut(fb.auth); },
+  currentUser() { return fb && fb.auth.currentUser; },
 
-  function assertTable(table) {
-    if (!Object.prototype.hasOwnProperty.call(TABLES, table)) {
-      throw new Error('Unknown table: ' + table);
-    }
-  }
-
-  function isTrue(v) { return v === true || String(v).toLowerCase() === 'true'; }
-
-  function defaultFor(table, field) {
-    if (TABLES[table].booleans.indexOf(field) !== -1) return false;
-    if (table === 'tasks' && field === 'status') return STATUSES[0];
-    if (table === 'notes' && field === 'color') return COLORS[0];
-    if (table === 'links' && field === 'category') return 'General';
-    return '';
-  }
-
-  function sanitize(table, values) {
-    var config = TABLES[table];
-    var clean = {};
-    config.editable.forEach(function (field) {
-      if (values[field] === undefined || values[field] === null) return;
-      if (config.booleans.indexOf(field) !== -1) clean[field] = isTrue(values[field]);
-      else clean[field] = String(values[field]).slice(0, MAX_FIELD_LENGTH);
-    });
-    if (table === 'tasks' && clean.status !== undefined && STATUSES.indexOf(clean.status) === -1) {
-      clean.status = STATUSES[0];
-    }
-    if (table === 'notes' && clean.color !== undefined && COLORS.indexOf(clean.color) === -1) {
-      clean.color = COLORS[0];
-    }
-    if (table === 'links') {
-      if (clean.url !== undefined) clean.url = normalizeUrl(clean.url);
-      if (clean.category !== undefined && !clean.category.trim()) clean.category = 'General';
-    }
-    return clean;
-  }
-
-  // Anything that isn't plainly http(s) is dropped, so a stored
-  // "javascript:" value can never become a live link.
-  function normalizeUrl(raw) {
-    var url = String(raw).trim();
-    if (!url) return '';
-    if (/^https?:\/\//i.test(url)) return url;
-    if (/^[a-z][a-z0-9+.\-]*:/i.test(url)) return '';
-    return 'https://' + url;
-  }
-
-  function sorted(table) {
-    return db[table].slice().sort(function (a, b) { return a.sortOrder - b.sortOrder; });
-  }
-
-  function clone(o) { return JSON.parse(JSON.stringify(o)); }
-
-  var Store = {
-    STATUSES: STATUSES,
-    COLORS: COLORS,
-
-    loadAll: function () {
-      var out = {};
-      TABLE_NAMES.forEach(function (t) { out[t] = clone(sorted(t)); });
-      return out;
-    },
-
-    // New items go to the top, same as the original.
-    create: function (table, values) {
-      assertTable(table);
-      var list = db[table];
-      var top = list.length
-        ? Math.min.apply(null, list.map(function (i) { return i.sortOrder; })) - 1
-        : 0;
-      var clean = sanitize(table, values || {});
-      var now = new Date().toISOString();
-      var record = { id: uuid(), sortOrder: top, created: now, updated: now };
-      TABLES[table].editable.forEach(function (field) {
-        record[field] = clean[field] === undefined ? defaultFor(table, field) : clean[field];
-      });
-      list.push(record);
-      persist();
-      return clone(record);
-    },
-
-    update: function (table, id, values) {
-      assertTable(table);
-      var item = db[table].filter(function (i) { return i.id === id; })[0];
-      if (!item) throw new Error('No item with id ' + id);
-      var clean = sanitize(table, values || {});
-      Object.keys(clean).forEach(function (k) { item[k] = clean[k]; });
-      item.updated = new Date().toISOString();
-      persist();
-      return clone(item);
-    },
-
-    remove: function (table, id) {
-      assertTable(table);
-      db[table] = db[table].filter(function (i) { return i.id !== id; });
-      persist();
-      return true;
-    },
-
-    reorder: function (table, orderedIds) {
-      assertTable(table);
-      var rank = {};
-      orderedIds.forEach(function (id, i) { rank[id] = i; });
-      db[table].forEach(function (item) {
-        item.sortOrder = Object.prototype.hasOwnProperty.call(rank, item.id)
-          ? rank[item.id] : orderedIds.length;
-      });
-      persist();
-      return true;
-    },
-
-    exportJson: function () {
-      return JSON.stringify({ app: 'everything-app', version: 1,
-        exported: new Date().toISOString(), tasks: db.tasks, notes: db.notes, links: db.links }, null, 2);
-    },
-
-    // Replaces everything. Each row is re-sanitized so a hand-edited file
-    // can't smuggle in odd fields or values.
-    importJson: function (text) {
-      var data = JSON.parse(text);
-      if (!data || !Array.isArray(data.tasks) || !Array.isArray(data.notes)) {
-        throw new Error('That file is not an Everything App backup.');
+  /* ---- live data ---- */
+  // Resolves once every collection has delivered its first snapshot (from
+  // the device cache if offline). After that, onChange fires on every update
+  // from any device.
+  start(userId, onChange, onError) {
+    this.stop();
+    uid = userId;
+    mirror = empty();
+    settings = {};
+    changeHandler = onChange || changeHandler;
+    if (onError) errorHandler = onError;
+    return new Promise(function (resolve) {
+      const pending = new Set(TABLE_NAMES.concat(['settings']));
+      function arrived(name) {
+        if (pending.has(name)) { pending.delete(name); if (!pending.size) resolve(); }
+        else changeHandler(name);
       }
-      var next = empty();
       TABLE_NAMES.forEach(function (table) {
-        // Older backups have no links — that's fine.
-        (Array.isArray(data[table]) ? data[table] : []).forEach(function (row, i) {
-          var clean = sanitize(table, row || {});
-          var rec = {
-            id: String(row.id || uuid()),
-            sortOrder: Number(row.sortOrder) || i,
-            created: String(row.created || new Date().toISOString()),
-            updated: String(row.updated || new Date().toISOString())
-          };
-          TABLES[table].editable.forEach(function (f) {
-            rec[f] = clean[f] === undefined ? defaultFor(table, f) : clean[f];
+        unsubs.push(fb.f.onSnapshot(col(table), function (snap) {
+          mirror[table] = snap.docs.map(function (d, i) {
+            return normalizeRecord(table, Object.assign({ id: d.id }, d.data()), i);
           });
-          next[table].push(rec);
-        });
+          arrived(table);
+        }, function (e) { errorHandler(e); arrived(table); }));
       });
-      db = next;
-      persist();
-      return { tasks: db.tasks.length, notes: db.notes.length, links: db.links.length };
-    },
+      unsubs.push(fb.f.onSnapshot(settingsRef(), function (snap) {
+        settings = snap.exists() ? snap.data() : {};
+        arrived('settings');
+      }, function (e) { errorHandler(e); arrived('settings'); }));
+    });
+  },
 
-    // Another tab of the app wrote — pick up its copy.
-    reloadFromDisk: function () { db = read(); },
-    KEY: KEY
-  };
+  stop() {
+    unsubs.forEach(function (u) { try { u(); } catch (e) { /* ignore */ } });
+    unsubs = [];
+    uid = null;
+    mirror = empty();
+    settings = {};
+  },
 
-  global.Store = Store;
-})(window);
+  loadAll() {
+    const out = {};
+    TABLE_NAMES.forEach(function (t) { out[t] = clone(sorted(t)); });
+    return out;
+  },
+
+  /* ---- mutations (same shape as the original Apps Script API) ---- */
+  create(table, values) {
+    assertTable(table); assertSignedIn();
+    const list = mirror[table];
+    const top = list.length ? Math.min.apply(null, list.map(function (i) { return i.sortOrder; })) - 1 : 0;
+    const now = new Date().toISOString();
+    const rec = normalizeRecord(table, Object.assign({}, values, { id: uuid(), sortOrder: top, created: now, updated: now }));
+    list.push(rec);
+    send(fb.f.setDoc(ref(table, rec.id), body(rec)));
+    return clone(rec);
+  },
+
+  update(table, id, values) {
+    assertTable(table); assertSignedIn();
+    const item = mirror[table].filter(function (i) { return i.id === id; })[0];
+    if (!item) throw new Error('That item no longer exists — it may have been deleted on another device.');
+    const clean = sanitize(table, values || {});
+    clean.updated = new Date().toISOString();
+    Object.assign(item, clean);
+    send(fb.f.setDoc(ref(table, id), clean, { merge: true }));
+    return clone(item);
+  },
+
+  remove(table, id) {
+    assertTable(table); assertSignedIn();
+    mirror[table] = mirror[table].filter(function (i) { return i.id !== id; });
+    send(fb.f.deleteDoc(ref(table, id)));
+    return true;
+  },
+
+  reorder(table, orderedIds) {
+    assertTable(table); assertSignedIn();
+    const rank = {};
+    orderedIds.forEach(function (id, i) { rank[id] = i; });
+    const ops = [];
+    mirror[table].forEach(function (item) {
+      const next = Object.prototype.hasOwnProperty.call(rank, item.id) ? rank[item.id] : orderedIds.length;
+      if (item.sortOrder === next) return;
+      item.sortOrder = next;
+      ops.push(function (batch) { batch.set(ref(table, item.id), { sortOrder: next }, { merge: true }); });
+    });
+    if (ops.length) send(commitInBatches(ops));
+    return true;
+  },
+
+  /* ---- per-person settings (daily checklist) ---- */
+  getSettings() { return clone(settings); },
+  saveSettings(partial) {
+    assertSignedIn();
+    Object.assign(settings, partial);
+    send(fb.f.setDoc(settingsRef(), partial, { merge: true }));
+  },
+
+  /* ---- backups ---- */
+  exportJson() {
+    return JSON.stringify(Object.assign({ app: 'everything-app', version: 2, exported: new Date().toISOString() },
+      this.loadAll()), null, 2);
+  },
+
+  // Replaces everything in the signed-in account.
+  async importJson(text) {
+    assertSignedIn();
+    const data = JSON.parse(text);
+    if (!data || !Array.isArray(data.tasks) || !Array.isArray(data.notes)) {
+      throw new Error('That file is not an Everything App backup.');
+    }
+    const ops = [];
+    const counts = {};
+    TABLE_NAMES.forEach(function (table) {
+      mirror[table].forEach(function (item) { ops.push(function (b) { b.delete(ref(table, item.id)); }); });
+      const rows = (Array.isArray(data[table]) ? data[table] : []).map(function (row, i) { return normalizeRecord(table, row, i); });
+      rows.forEach(function (rec) { ops.push(function (b) { b.set(ref(table, rec.id), body(rec)); }); });
+      mirror[table] = rows;
+      counts[table] = rows.length;
+    });
+    send(commitInBatches(ops));
+    return counts;
+  },
+
+  /* ---- one-time move from the device-only version ---- */
+  legacySummary() { const l = legacyData(); return l ? l.count : 0; },
+  legacyHandled(userId) { try { return !!localStorage.getItem('everything-app:legacy-handled:' + userId); } catch (e) { return true; } },
+  markLegacyHandled(userId) { try { localStorage.setItem('everything-app:legacy-handled:' + userId, '1'); } catch (e) { /* ignore */ } },
+
+  // Merges by id, so running it on two devices never creates duplicates of
+  // the same item. The device copy is renamed afterwards so a different
+  // person signing in on this device isn't offered it.
+  migrateLegacy() {
+    assertSignedIn();
+    const legacy = legacyData();
+    if (!legacy) return 0;
+    const ops = [];
+    TABLE_NAMES.forEach(function (table) {
+      legacy.data[table].forEach(function (row, i) {
+        const rec = normalizeRecord(table, row, i);
+        const existing = mirror[table].findIndex(function (m) { return m.id === rec.id; });
+        if (existing === -1) mirror[table].push(rec); else mirror[table][existing] = rec;
+        ops.push(function (b) { b.set(ref(table, rec.id), body(rec), { merge: true }); });
+      });
+    });
+    send(commitInBatches(ops));
+    try {
+      localStorage.setItem(LEGACY_KEY + ':uploaded', localStorage.getItem(LEGACY_KEY));
+      localStorage.removeItem(LEGACY_KEY);
+    } catch (e) { /* ignore */ }
+    return legacy.count;
+  }
+};
+
+window.Store = Store;

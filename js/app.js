@@ -1,3 +1,5 @@
+import { Store } from './store.js';
+
 (function () {
   'use strict';
 
@@ -59,11 +61,6 @@
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' +
       String(d.getDate()).padStart(2, '0');
   }
-  function lsGet(key, fallback) {
-    try { var v = localStorage.getItem(key); return v == null ? fallback : JSON.parse(v); }
-    catch (e) { return fallback; }
-  }
-  function lsSet(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* ignore */ } }
 
   /* ---------------------------------------------------- editing keys -- */
   // Tab indents inside a markdown field rather than moving focus.
@@ -275,17 +272,20 @@
   }
 
   /* ------------------------------------------------------------- home -- */
-  // A personal checklist that resets every day. Not stored with tasks —
-  // checks live under today's date so a new day always starts blank.
-  function dailyItems() { return lsGet('everything-app:daily-items', DEFAULT_DAILY); }
+  // A personal checklist that resets every day. Synced with your account;
+  // checks are stored against today's date, so a new day always starts blank.
+  function dailyItems() {
+    var s = Store.getSettings();
+    return Array.isArray(s.dailyItems) ? s.dailyItems : DEFAULT_DAILY;
+  }
   function dailyChecks() {
-    var key = 'everything-app:daily:' + dayKey();
-    try {
-      Object.keys(localStorage).forEach(function (k) {
-        if (k.indexOf('everything-app:daily:') === 0 && k !== key) localStorage.removeItem(k);
-      });
-    } catch (e) { /* ignore */ }
-    return { key: key, checked: lsGet(key, {}) };
+    var s = Store.getSettings();
+    var today = dayKey();
+    var checked = s.dailyChecks && s.dailyChecks.date === today ? (s.dailyChecks.checked || {}) : {};
+    return {
+      checked: checked,
+      save: function () { Store.saveSettings({ dailyChecks: { date: today, checked: checked } }); }
+    };
   }
 
   function renderDailyTasks() {
@@ -302,8 +302,10 @@
         name: 'items', label: 'One item per line', type: 'textarea',
         value: items.join('\n'), hint: 'Checks reset every morning.'
       }], function (v) {
-        lsSet('everything-app:daily-items', v.items.split('\n').map(function (s) { return s.trim(); }).filter(Boolean));
-        lsSet(store.key, {});
+        Store.saveSettings({
+          dailyItems: v.items.split('\n').map(function (s) { return s.trim(); }).filter(Boolean),
+          dailyChecks: { date: dayKey(), checked: {} }
+        });
         renderDailyTasks();
       });
     });
@@ -319,7 +321,7 @@
       box.checked = !!store.checked[label];
       box.addEventListener('change', function () {
         store.checked[label] = box.checked;
-        lsSet(store.key, store.checked);
+        store.save();
         row.classList.toggle('is-done', box.checked);
       });
       row.appendChild(box);
@@ -740,11 +742,10 @@
     var reader = new FileReader();
     reader.onload = function () {
       if (!window.confirm('Replace everything in this app with the contents of "' + file.name + '"?')) return;
-      try {
-        var counts = Store.importJson(String(reader.result));
+      Store.importJson(String(reader.result)).then(function (counts) {
         load();
         toast('Imported ' + counts.tasks + ' tasks, ' + counts.links + ' links and ' + counts.notes + ' notes');
-      } catch (e) { fail(e); }
+      }).catch(fail);
     };
     reader.readAsText(file);
   }
@@ -752,6 +753,7 @@
 
   /* ------------------------------------------------------------- boot -- */
   function load() {
+    pendingRender = false;
     var data = Store.loadAll();
     state.tasks = data.tasks;
     state.notes = data.notes;
@@ -835,13 +837,31 @@
   document.addEventListener('visibilitychange', function () { if (document.hidden) flushAll(); });
   window.addEventListener('pagehide', flushAll);
 
-  // Keep two open tabs/windows of the app in step.
-  window.addEventListener('storage', function (e) {
-    if (e.key !== Store.KEY) return;
-    Store.reloadFromDisk();
-    if (document.activeElement && /INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
+  /* ------------------------------------------------------- live sync -- */
+  // An update arrived (from this or another device). Redraw — unless you're
+  // in the middle of typing or editing, in which case wait until you're done
+  // so the field doesn't get yanked out from under you.
+  var pendingRender = false;
+  function isEditing() {
+    if (dialog.open) return true;
+    // Only fields inside the redrawn lists count; the add forms are static.
+    var a = document.activeElement;
+    if (!a || !/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return false;
+    return !!a.closest('#task-list, #link-groups, #note-grid, #home-tasks, #home-notes, #daily-tasks');
+  }
+  function scheduleRender() {
+    if (isEditing() || document.querySelector('.dragging')) { pendingRender = true; return; }
     load();
+  }
+  document.addEventListener('focusout', function () {
+    if (!pendingRender) return;
+    setTimeout(function () { if (pendingRender && !isEditing()) { flushAll(); load(); } }, 50);
   });
+  dialog.addEventListener('close', function () { if (pendingRender) setTimeout(scheduleRender, 0); });
+
+  function updateNetBadge() { document.getElementById('net').hidden = navigator.onLine; }
+  window.addEventListener('online', updateNetBadge);
+  window.addEventListener('offline', updateNetBadge);
 
   /* ------------------------------------------------------------- PWA -- */
   if ('serviceWorker' in navigator) {
@@ -863,6 +883,134 @@
   });
   window.addEventListener('appinstalled', function () { installBtn.hidden = true; });
 
-  load();
-  showTab(location.hash.slice(1) || 'home', true);
+  /* ---------------------------------------------------------- sign in -- */
+  var authView = document.getElementById('auth');
+  var shell = document.querySelector('.shell');
+  var bootView = document.getElementById('boot');
+  var authMode = 'signin';
+
+  function show(which) {
+    bootView.hidden = which !== 'boot';
+    authView.hidden = which !== 'auth';
+    shell.hidden = which !== 'app';
+    document.getElementById('setup').hidden = which !== 'setup';
+  }
+  function authError(e) {
+    var code = (e && e.code) || '';
+    var messages = {
+      'auth/invalid-credential': 'Wrong email or password.',
+      'auth/wrong-password': 'Wrong email or password.',
+      'auth/user-not-found': 'No account with that email — tap "Create an account".',
+      'auth/invalid-email': 'That email address doesn\'t look right.',
+      'auth/email-already-in-use': 'There\'s already an account with that email. Sign in instead.',
+      'auth/weak-password': 'Use at least 6 characters for the password.',
+      'auth/too-many-requests': 'Too many attempts. Wait a minute and try again.',
+      'auth/network-request-failed': 'No connection. Connect to the internet to sign in.',
+      'auth/popup-closed-by-user': '',
+      'auth/cancelled-popup-request': '',
+      'auth/popup-blocked': 'The sign-in window was blocked. Allow pop-ups, or use email and password.',
+      'auth/operation-not-supported-in-this-environment': 'Google sign-in isn\'t supported here. Use email and password on this device.',
+      'auth/unauthorized-domain': 'This website isn\'t authorized in Firebase yet — add it under Authentication → Settings → Authorized domains.',
+      'auth/operation-not-allowed': 'That sign-in method isn\'t turned on in Firebase (Authentication → Sign-in method).'
+    };
+    var text = Object.prototype.hasOwnProperty.call(messages, code) ? messages[code] : (e && e.message) || String(e);
+    document.getElementById('auth-error').textContent = text;
+  }
+  function setAuthMode(mode) {
+    authMode = mode;
+    document.getElementById('auth-submit').textContent = mode === 'signup' ? 'Create account' : 'Sign in';
+    document.getElementById('auth-toggle').textContent = mode === 'signup' ? 'I already have an account' : 'Create an account';
+    document.getElementById('auth-password').autocomplete = mode === 'signup' ? 'new-password' : 'current-password';
+    document.getElementById('auth-error').textContent = '';
+  }
+  function busy(on) {
+    authView.querySelectorAll('button, input').forEach(function (b) { b.disabled = on; });
+  }
+
+  document.getElementById('auth-google').addEventListener('click', function () {
+    document.getElementById('auth-error').textContent = '';
+    busy(true);
+    Store.signInWithGoogle().catch(authError).finally(function () { busy(false); });
+  });
+  document.getElementById('auth-form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var email = document.getElementById('auth-email').value.trim();
+    var password = document.getElementById('auth-password').value;
+    if (!email || !password) { authError({ message: 'Enter your email and a password.' }); return; }
+    document.getElementById('auth-error').textContent = '';
+    busy(true);
+    (authMode === 'signup' ? Store.createAccount(email, password) : Store.signInWithEmail(email, password))
+      .catch(authError).finally(function () { busy(false); });
+  });
+  document.getElementById('auth-toggle').addEventListener('click', function () {
+    setAuthMode(authMode === 'signup' ? 'signin' : 'signup');
+  });
+  document.getElementById('auth-reset').addEventListener('click', function () {
+    var email = document.getElementById('auth-email').value.trim();
+    if (!email) { authError({ message: 'Type your email above first, then tap "Forgot password?".' }); return; }
+    Store.resetPassword(email).then(function () {
+      document.getElementById('auth-error').textContent = '';
+      toast('Password reset email sent to ' + email);
+    }).catch(authError);
+  });
+  document.getElementById('signout').addEventListener('click', function () {
+    closeMenu();
+    flushAll();
+    if (!window.confirm('Sign out of this device?')) return;
+    Store.signOut();
+  });
+
+  function maybeOfferLegacy(user) {
+    var count = Store.legacySummary();
+    if (!count || Store.legacyHandled(user.uid)) return;
+    Store.markLegacyHandled(user.uid);
+    if (!window.confirm('This device has ' + count + ' item' + (count === 1 ? '' : 's') +
+      ' (tasks, links and notes) saved from before you signed in.\n\nCopy them into your account?')) return;
+    var n = Store.migrateLegacy();
+    load();
+    toast('Copied ' + n + ' item' + (n === 1 ? '' : 's') + ' into your account');
+  }
+
+  function showUser(user) {
+    var label = user.displayName || user.email || 'Signed in';
+    document.getElementById('account-name').textContent = label;
+    document.getElementById('account-email').textContent = user.email || '';
+    document.getElementById('account-initial').textContent = (label.trim()[0] || '?').toUpperCase();
+  }
+
+  var currentUid = null;
+  function boot() {
+    if (!Store.configured) { show('setup'); return; }
+    show('boot');
+    updateNetBadge();
+    Store.init().then(function () {
+      Store.onAuth(function (user) {
+        if (!user) {
+          currentUid = null;
+          Store.stop();
+          state.tasks = []; state.notes = []; state.links = [];
+          setAuthMode('signin');
+          document.getElementById('auth-password').value = '';
+          show('auth');
+          return;
+        }
+        if (user.uid === currentUid) return;
+        currentUid = user.uid;
+        showUser(user);
+        show('boot');
+        Store.start(user.uid, scheduleRender, fail).then(function () {
+          load();
+          show('app');
+          showTab(location.hash.slice(1) || 'home', true);
+          maybeOfferLegacy(user);
+        });
+      });
+    }).catch(function (e) {
+      bootView.textContent = navigator.onLine
+        ? 'Couldn\'t start: ' + (e && e.message ? e.message : e)
+        : 'You\'re offline and the app hasn\'t been opened online on this device yet. Connect once to finish setting up.';
+    });
+  }
+
+  boot();
 })();

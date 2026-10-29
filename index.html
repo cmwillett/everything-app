@@ -16,16 +16,55 @@
   <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
-  <div class="shell">
+  <div id="boot" class="boot">Loading…</div>
+
+  <!-- --------------------------------------------------------- SIGN IN -->
+  <div id="auth" class="auth" hidden>
+    <div class="auth-card">
+      <img src="icons/icon.svg" alt="" width="56" height="56">
+      <h1>Everything App</h1>
+      <p class="hint">Sign in to keep your tasks, links and notes in sync on all your devices.</p>
+      <button type="button" id="auth-google" class="ghost auth-google">
+        <svg viewBox="0 0 48 48" width="18" height="18" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.5l6.7-6.7C35.6 2.4 30.2 0 24 0 14.6 0 6.6 5.4 2.6 13.3l7.8 6C12.3 13.6 17.6 9.5 24 9.5z"/><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.3 5.5-4.8 7.2l7.5 5.8c4.4-4 7.1-10 7.1-17.5z"/><path fill="#FBBC05" d="M10.4 28.7c-.5-1.4-.8-3-.8-4.7s.3-3.3.8-4.7l-7.8-6C1 16.6 0 20.2 0 24s1 7.4 2.6 10.7l7.8-6z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.5-5.8c-2.1 1.4-4.8 2.3-8.4 2.3-6.4 0-11.7-4.1-13.6-9.8l-7.8 6C6.6 42.6 14.6 48 24 48z"/></svg>
+        Continue with Google
+      </button>
+      <div class="auth-or"><span>or</span></div>
+      <form id="auth-form" novalidate>
+        <input type="email" id="auth-email" placeholder="Email" autocomplete="email" autocapitalize="off" inputmode="email">
+        <input type="password" id="auth-password" placeholder="Password" autocomplete="current-password">
+        <button type="submit" class="primary" id="auth-submit">Sign in</button>
+      </form>
+      <div class="auth-links">
+        <button type="button" class="link-btn" id="auth-toggle">Create an account</button>
+        <button type="button" class="link-btn" id="auth-reset">Forgot password?</button>
+      </div>
+      <p id="auth-error" class="auth-error" role="alert"></p>
+    </div>
+  </div>
+
+  <div id="setup" class="auth" hidden>
+    <div class="auth-card">
+      <h1>Almost there</h1>
+      <p>Firebase isn't connected yet. Paste your project's config into <code>js/firebase-config.js</code>, commit and push — see the README for the step-by-step.</p>
+    </div>
+  </div>
+
+  <div class="shell" hidden>
     <header class="topbar">
       <h1>Everything App</h1>
       <div class="topbar-actions">
         <button type="button" id="install" class="ghost" hidden>Install</button>
+        <span id="net" class="net-badge" hidden title="Changes are saved on this device and will sync when you're back online">Offline</span>
         <details class="menu">
-          <summary class="ghost" aria-label="Data menu">Data</summary>
+          <summary class="avatar" aria-label="Account menu"><span id="account-initial">?</span></summary>
           <div class="menu-body">
+            <div class="menu-user">
+              <strong id="account-name"></strong>
+              <span id="account-email"></span>
+            </div>
             <button type="button" id="export">Export backup (.json)</button>
             <button type="button" id="import">Import backup…</button>
+            <button type="button" id="signout" class="danger-text">Sign out</button>
             <input type="file" id="import-file" accept="application/json,.json" hidden>
           </div>
         </details>
@@ -120,8 +159,7 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-  <script src="js/store.js"></script>
   <script src="js/markdown.js"></script>
-  <script src="js/app.js"></script>
+  <script type="module" src="js/app.js"></script>
 </body>
 </html>

@@ -74,6 +74,7 @@
     <nav class="tabs" role="tablist">
       <button type="button" class="tab" role="tab" data-tab="home">Home</button>
       <button type="button" class="tab" role="tab" data-tab="tasks">Tasks</button>
+      <button type="button" class="tab" role="tab" data-tab="reminders">Reminders</button>
       <button type="button" class="tab" role="tab" data-tab="links">Links</button>
       <button type="button" class="tab" role="tab" data-tab="notebook">Notebook</button>
     </nav>
@@ -114,6 +115,21 @@
         </form>
         <div class="filters" id="task-filters"></div>
         <div id="task-list"></div>
+      </section>
+
+      <!-- ----------------------------------------------------- REMINDERS -->
+      <section class="view" data-view="reminders">
+        <div id="push-banner"></div>
+        <form class="quick-add rem-form" id="rem-add" novalidate>
+          <input type="text" id="rem-title" placeholder="Remind me to…" autocomplete="off" enterkeyhint="next">
+          <textarea id="rem-desc" class="quick-add-notes is-short" placeholder="Details (optional)"></textarea>
+          <div class="quick-add-row rem-when">
+            <label class="rem-field"><span>Date</span><input type="date" id="rem-date"></label>
+            <label class="rem-field"><span>Time</span><input type="time" id="rem-time"></label>
+            <button type="submit" class="primary">Add reminder</button>
+          </div>
+        </form>
+        <div id="rem-list"></div>
       </section>
 
       <!-- --------------------------------------------------------- LINKS -->

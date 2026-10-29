@@ -1,4 +1,5 @@
 import { Store } from './store.js';
+import { messaging } from './cloud.js';
 
 (function () {
   'use strict';
@@ -12,7 +13,7 @@ import { Store } from './store.js';
   var DEFAULT_DAILY = ['Review Tasks', 'Move any Notes into Tasks if needed'];
 
   var state = {
-    tasks: [], notes: [], links: [],
+    tasks: [], notes: [], links: [], reminders: [],
     statuses: Store.STATUSES,
     colors: Store.COLORS,
     tab: 'home',
@@ -75,7 +76,7 @@ import { Store } from './store.js';
   }
 
   /* ------------------------------------------------------------- tabs -- */
-  var TABS = ['home', 'tasks', 'links', 'notebook'];
+  var TABS = ['home', 'tasks', 'reminders', 'links', 'notebook'];
   function showTab(name, fromHash) {
     if (TABS.indexOf(name) === -1) name = 'home';
     state.tab = name;
@@ -122,7 +123,7 @@ import { Store } from './store.js';
       else if (field.type === 'select') {
         input = el('select');
         field.options.forEach(function (o) { var opt = el('option', null, o); opt.value = o; input.appendChild(opt); });
-      } else { input = el('input'); input.type = 'text'; }
+      } else { input = el('input'); input.type = field.type === 'date' || field.type === 'time' ? field.type : 'text'; }
       input.id = 'f-' + field.name;
       input.name = field.name;
       input.value = field.value == null ? '' : field.value;
@@ -301,6 +302,7 @@ import { Store } from './store.js';
       stats.appendChild(statCard(live.filter(function (t) { return t.status === status; }).length,
         status, 'tasks', status));
     });
+    stats.appendChild(statCard(upcomingReminders().length, 'Reminders', 'reminders', null));
     stats.appendChild(statCard(state.links.length, 'Links', 'links', null));
     stats.appendChild(statCard(state.notes.length, 'Notes', 'notebook', null));
 
@@ -483,6 +485,284 @@ import { Store } from './store.js';
       { name: 'notes', label: 'Details', type: 'rich', value: task.notes, placeholder: 'Add details…' },
       { name: 'status', label: 'Status', type: 'select', options: state.statuses, value: task.status }
     ], function (values) { update('tasks', id, values); });
+  }
+
+  /* -------------------------------------------------------- reminders -- */
+  function pad2(n) { return String(n).padStart(2, '0'); }
+  function dateInputValue(d) { return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
+  function timeInputValue(d) { return pad2(d.getHours()) + ':' + pad2(d.getMinutes()); }
+  // Date + time fields → a moment in the phone's own time zone.
+  function fromInputs(dateStr, timeStr) {
+    var d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr || '');
+    var t = /^(\d{1,2}):(\d{2})/.exec(timeStr || '');
+    if (!d || !t) return NaN;
+    return new Date(+d[1], +d[2] - 1, +d[3], +t[1], +t[2], 0, 0).getTime();
+  }
+  function startOfDay(ms) { var d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime(); }
+  function whenLabel(ms) {
+    var d = new Date(ms);
+    var days = Math.round((startOfDay(ms) - startOfDay(Date.now())) / 86400000);
+    var time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    var day;
+    if (days === 0) day = 'Today';
+    else if (days === 1) day = 'Tomorrow';
+    else if (days === -1) day = 'Yesterday';
+    else if (days > 1 && days < 7) day = d.toLocaleDateString(undefined, { weekday: 'long' });
+    else day = d.toLocaleDateString(undefined, {
+      weekday: 'short', month: 'short', day: 'numeric',
+      year: d.getFullYear() === new Date().getFullYear() ? undefined : 'numeric'
+    });
+    return day + ' · ' + time;
+  }
+  function upcomingReminders() {
+    return state.reminders.filter(function (r) { return r.status !== 'sent'; })
+      .sort(function (a, b) { return a.dueAtMs - b.dueAtMs; });
+  }
+  function sentReminders() {
+    return state.reminders.filter(function (r) { return r.status === 'sent'; })
+      .sort(function (a, b) { return b.dueAtMs - a.dueAtMs; });
+  }
+
+  // Sensible defaults: today, at the next whole hour.
+  function resetReminderForm() {
+    var next = new Date();
+    next.setMinutes(0, 0, 0);
+    next.setHours(next.getHours() + 1);
+    document.getElementById('rem-title').value = '';
+    document.getElementById('rem-desc').value = '';
+    document.getElementById('rem-date').value = dateInputValue(next);
+    document.getElementById('rem-time').value = timeInputValue(next);
+  }
+
+  var remOpenSent = false;
+  function renderReminders() {
+    renderPushBanner();
+    var host = clear(document.getElementById('rem-list'));
+    var upcoming = upcomingReminders();
+    var sent = sentReminders();
+
+    var head = el('h3', 'group-head');
+    head.appendChild(document.createTextNode('Upcoming '));
+    head.appendChild(el('span', 'group-count', String(upcoming.length)));
+    host.appendChild(head);
+    var list = el('div', 'list');
+    if (!upcoming.length) list.appendChild(el('p', 'empty', 'No reminders coming up.'));
+    upcoming.forEach(function (r) { list.appendChild(reminderRow(r)); });
+    host.appendChild(list);
+
+    if (sent.length) {
+      var box = el('details', 'archive');
+      box.open = remOpenSent;
+      box.addEventListener('toggle', function () { remOpenSent = box.open; });
+      var summary = el('summary', 'group-head', 'Sent (' + sent.length + ')');
+      box.appendChild(summary);
+      var sentList = el('div', 'list');
+      sent.forEach(function (r) { sentList.appendChild(reminderRow(r)); });
+      var clearAll = el('button', 'ghost danger rem-clear', 'Clear sent reminders');
+      clearAll.type = 'button';
+      clearAll.addEventListener('click', function () {
+        if (!window.confirm('Delete all ' + sent.length + ' sent reminder' + (sent.length === 1 ? '' : 's') + '?')) return;
+        sent.forEach(function (r) { Store.remove('reminders', r.id); });
+        state.reminders = state.reminders.filter(function (r) { return r.status !== 'sent'; });
+        rerender('reminders');
+      });
+      sentList.appendChild(clearAll);
+      box.appendChild(sentList);
+      host.appendChild(box);
+    }
+  }
+
+  function reminderRow(r) {
+    var sent = r.status === 'sent';
+    var overdue = !sent && r.dueAtMs < Date.now() - 90 * 1000;
+    var row = el('div', 'row rem-row' + (sent ? ' is-sent' : ''));
+    row.dataset.id = r.id;
+    row.appendChild(el('span', 'rem-icon', sent ? '✓' : '🔔'));
+    var main = el('div', 'row-main');
+    main.appendChild(el('div', 'row-title', r.title || '(untitled)'));
+    if (r.description) main.appendChild(el('div', 'row-sub', r.description));
+    var when = el('div', 'rem-when-label', whenLabel(r.dueAtMs));
+    if (overdue) when.appendChild(el('span', 'pill rem-late', 'Sending…'));
+    main.appendChild(when);
+    row.appendChild(main);
+    var actions = el('div', 'row-actions');
+    actions.appendChild(iconButton(sent ? 'Remind me again' : 'Edit', sent ? '↻' : '✎', function () { editReminder(r.id); }));
+    actions.appendChild(iconButton('Delete', '✕', function () { remove('reminders', r.id, r.title); }, true));
+    row.appendChild(actions);
+    return row;
+  }
+
+  function editReminder(id) {
+    var r = byId(state.reminders, id);
+    if (!r) return;
+    var due = new Date(r.status === 'sent' ? Math.max(r.dueAtMs, Date.now() + 3600000) : r.dueAtMs);
+    openEditor(r.status === 'sent' ? 'Remind me again' : 'Edit reminder', [
+      { name: 'title', label: 'Remind me to…', value: r.title },
+      { name: 'description', label: 'Details (optional)', type: 'textarea', value: r.description },
+      { name: 'date', label: 'Date', type: 'date', value: dateInputValue(due) },
+      { name: 'time', label: 'Time', type: 'time', value: timeInputValue(due) }
+    ], function (v) {
+      var ms = fromInputs(v.date, v.time);
+      if (!v.title.trim()) { toast('Give the reminder a title', true); return; }
+      if (!Number.isFinite(ms)) { toast('Pick a date and time', true); return; }
+      if (ms <= Date.now()) { toast('That time has already passed', true); return; }
+      update('reminders', id, { title: v.title.trim(), description: v.description.trim(), dueAtMs: ms });
+    });
+  }
+
+  document.getElementById('rem-add').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var title = document.getElementById('rem-title');
+    var ms = fromInputs(document.getElementById('rem-date').value, document.getElementById('rem-time').value);
+    if (!title.value.trim()) { toast('What should I remind you about?', true); title.focus(); return; }
+    if (!Number.isFinite(ms)) { toast('Pick a date and time', true); return; }
+    if (ms <= Date.now()) { toast('That time has already passed', true); return; }
+    create('reminders', { title: title.value.trim(), description: document.getElementById('rem-desc').value.trim(), dueAtMs: ms })
+      .then(function () {
+        toast('Reminder set for ' + whenLabel(ms).replace(' · ', ' at '));
+        if (pushState() === 'off') pulseBanner();
+      });
+    resetReminderForm();
+    title.focus();
+  });
+  resetReminderForm();
+
+  // Keep "Today/Tomorrow" and "Sending…" labels current.
+  setInterval(function () {
+    if (document.hidden || state.tab !== 'reminders' || isEditing()) return;
+    renderReminders();
+  }, 30000);
+
+  /* ------------------------------------------- notifications (push) -- */
+  var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  function isStandalone() {
+    return window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  }
+  function tokenKey() { return 'everything-app:push-token:' + (currentUid || ''); }
+  function savedToken() { try { return localStorage.getItem(tokenKey()); } catch (e) { return null; } }
+  function saveToken(t) { try { if (t) localStorage.setItem(tokenKey(), t); else localStorage.removeItem(tokenKey()); } catch (e) { /* ignore */ } }
+
+  // 'on' | 'off' | 'denied' | 'install' (iPhone, not the Home Screen app) | 'unsupported'
+  function pushState() {
+    if (isIOS && !isStandalone()) return 'install';
+    if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) return 'unsupported';
+    if (Notification.permission === 'denied') return 'denied';
+    if (Notification.permission === 'granted' && savedToken()) return 'on';
+    return 'off';
+  }
+
+  function deviceLabel() {
+    var ua = navigator.userAgent;
+    var what = /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) ? 'iPad' : /Android/.test(ua) ? 'Android'
+      : /Windows/.test(ua) ? 'Windows' : /Mac/.test(ua) ? 'Mac' : 'Device';
+    var browser = /Edg\//.test(ua) ? 'Edge' : /Chrome\//.test(ua) ? 'Chrome' : /Firefox\//.test(ua) ? 'Firefox' : /Safari\//.test(ua) ? 'Safari' : '';
+    return what + (browser ? ' · ' + browser : '') + (isStandalone() ? ' (app)' : '');
+  }
+
+  async function getPushToken() {
+    var api = await messaging();
+    if (!api) throw new Error('This browser can\'t receive notifications.');
+    if (!api.vapidKey || /^PASTE/.test(api.vapidKey)) throw new Error('Notifications aren\'t set up yet — the Web Push key is missing from js/push-config.js.');
+    var reg = await navigator.serviceWorker.ready;
+    return api.m.getToken(api.messaging, { vapidKey: api.vapidKey, serviceWorkerRegistration: reg });
+  }
+
+  async function enablePush() {
+    // Must run straight from the tap, or iPhone ignores the request.
+    var permission = await Notification.requestPermission();
+    if (permission !== 'granted') { renderPushBanner(); return; }
+    var token = await getPushToken();
+    await Store.registerDevice(token, deviceLabel());
+    saveToken(token);
+    renderPushBanner();
+    toast('Notifications are on for this device');
+  }
+
+  async function disablePush() {
+    await forgetDevice();
+    renderPushBanner();
+    toast('Notifications are off for this device');
+  }
+
+  // Tokens can change; re-register quietly each time the app opens.
+  async function refreshPush() {
+    if (pushState() !== 'on') { renderPushBanner(); return; }
+    try {
+      var token = await getPushToken();
+      var old = savedToken();
+      if (token !== old) {
+        if (old) Store.unregisterDevice(old).catch(function () {});
+        saveToken(token);
+      }
+      await Store.registerDevice(token, deviceLabel());
+    } catch (e) { /* offline or blocked — try again next launch */ }
+    renderPushBanner();
+  }
+
+  async function forgetDevice() {
+    var token = savedToken();
+    if (!token) return;
+    saveToken(null);
+    try {
+      var timeout = new Promise(function (resolve) { setTimeout(resolve, 4000); });
+      await Promise.race([Store.unregisterDevice(token), timeout]);
+      var api = await messaging();
+      if (api) await Promise.race([api.m.deleteToken(api.messaging), timeout]);
+    } catch (e) { /* ignore */ }
+  }
+
+  function sendTest() {
+    var ms = Date.now() + 60 * 1000;
+    create('reminders', { title: 'Test reminder', description: 'If you can see this, reminders are working.', dueAtMs: ms })
+      .then(function () { toast('Test reminder set — it should arrive within about a minute. You can close the app.'); });
+  }
+
+  function pulseBanner() {
+    var b = document.querySelector('#push-banner .push-banner');
+    if (!b) return;
+    b.classList.remove('pulse'); void b.offsetWidth; b.classList.add('pulse');
+  }
+
+  function renderPushBanner() {
+    var host = clear(document.getElementById('push-banner'));
+    var st = pushState();
+    var box = el('div', 'push-banner is-' + st);
+    var text = el('div', 'push-text');
+    var actions = el('div', 'push-actions');
+    function button(label, cls, fn) {
+      var b = el('button', cls, label);
+      b.type = 'button';
+      b.addEventListener('click', function () {
+        b.disabled = true;
+        Promise.resolve().then(fn).catch(fail).finally(function () { b.disabled = false; });
+      });
+      actions.appendChild(b);
+    }
+    if (st === 'on') {
+      text.appendChild(el('strong', null, '🔔 Notifications are on'));
+      text.appendChild(el('span', null, ' for this device.'));
+      button('Send a test', 'ghost', sendTest);
+      button('Turn off', 'link-btn', disablePush);
+    } else if (st === 'off') {
+      text.appendChild(el('strong', null, 'Turn on notifications'));
+      text.appendChild(el('span', null, ' so reminders pop up on this device, even when the app is closed.'));
+      button('Turn on', 'primary', enablePush);
+    } else if (st === 'denied') {
+      text.appendChild(el('strong', null, 'Notifications are blocked'));
+      text.appendChild(el('span', null, isIOS
+        ? ' — open iPhone Settings → Notifications → Everything, and allow them.'
+        : ' — click the icon left of the address bar (or open site settings) and allow Notifications, then reload.'));
+    } else if (st === 'install') {
+      text.appendChild(el('strong', null, 'To get reminder notifications on iPhone,'));
+      text.appendChild(el('span', null, ' open the Everything app from your Home Screen (Safari → Share → Add to Home Screen) and turn them on there.'));
+    } else {
+      text.appendChild(el('strong', null, 'This browser can\'t show notifications.'));
+      text.appendChild(el('span', null, ' Reminders will still sync — turn notifications on from your phone or another browser.'));
+    }
+    box.appendChild(text);
+    box.appendChild(actions);
+    host.appendChild(box);
   }
 
   /* ------------------------------------------------------------ links -- */
@@ -669,6 +949,7 @@ import { Store } from './store.js';
     if (table === 'tasks') renderTasks();
     if (table === 'notes') renderNotes();
     if (table === 'links') renderLinks();
+    if (table === 'reminders') renderReminders();
     if (state.tab === 'home') renderHome();
   }
 
@@ -703,7 +984,9 @@ import { Store } from './store.js';
     state.tasks = data.tasks;
     state.notes = data.notes;
     state.links = data.links;
+    state.reminders = data.reminders;
     renderTasks();
+    renderReminders();
     renderLinks();
     renderNotes();
     renderHome();
@@ -790,7 +1073,7 @@ import { Store } from './store.js';
     // Only fields inside the redrawn lists count; the add forms are static.
     var a = document.activeElement;
     if (!a || !(/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) || a.isContentEditable)) return false;
-    return !!a.closest('#task-list, #link-groups, #note-grid, #home-tasks, #home-notes, #daily-tasks');
+    return !!a.closest('#task-list, #link-groups, #note-grid, #home-tasks, #home-notes, #daily-tasks, #rem-list');
   }
   function scheduleRender() {
     if (isEditing() || document.querySelector('.dragging')) { pendingRender = true; return; }
@@ -900,7 +1183,8 @@ import { Store } from './store.js';
     closeMenu();
     flushAll();
     if (!window.confirm('Sign out of this device?')) return;
-    Store.signOut();
+    // Stop this device getting the signed-out person's reminders.
+    forgetDevice().finally(function () { Store.signOut(); });
   });
 
   function maybeOfferLegacy(user) {
@@ -931,7 +1215,7 @@ import { Store } from './store.js';
         if (!user) {
           currentUid = null;
           Store.stop();
-          state.tasks = []; state.notes = []; state.links = [];
+          state.tasks = []; state.notes = []; state.links = []; state.reminders = [];
           setAuthMode('signin');
           document.getElementById('auth-password').value = '';
           show('auth');
@@ -946,6 +1230,7 @@ import { Store } from './store.js';
           show('app');
           showTab(location.hash.slice(1) || 'home', true);
           maybeOfferLegacy(user);
+          refreshPush();
         });
       });
     }).catch(function (e) {

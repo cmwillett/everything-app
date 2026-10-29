@@ -461,3 +461,40 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
   .rte-editor { font-size: 16px; }
   .rte-btn { min-width: 36px; height: 36px; }
 }
+
+/* reminders */
+.rem-form { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; box-shadow: var(--shadow); }
+.rem-form > input[type="text"] { font-weight: 500; }
+.rem-when { align-items: flex-end; }
+.rem-field { display: flex; flex-direction: column; gap: 4px; flex: 1 1 140px; font-size: 12px; color: var(--text-dim); }
+input[type="date"], input[type="time"] {
+  font: inherit; color: var(--text); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; width: 100%; min-height: 40px;
+}
+.rem-when .primary { flex: 0 0 auto; min-height: 40px; }
+.rem-row { align-items: center; }
+.rem-icon { font-size: 18px; width: 26px; text-align: center; flex: none; }
+.rem-row.is-sent { opacity: .65; }
+.rem-row.is-sent .rem-icon { color: var(--text-dim); font-weight: 700; }
+.rem-when-label { color: var(--accent); font-size: 12.5px; font-weight: 500; margin-top: 3px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.rem-row.is-sent .rem-when-label { color: var(--text-dim); }
+.rem-row .row-sub { white-space: pre-wrap; }
+.rem-late { background: rgba(127,127,127,.18); color: var(--text-dim); font-size: 10.5px; padding: 2px 7px; }
+.rem-clear { align-self: flex-start; margin-top: 4px; font-size: 13px; }
+
+.push-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  padding: 12px 14px; margin-bottom: 14px; border-radius: var(--radius);
+  background: var(--accent-soft); border: 1px solid transparent;
+}
+.push-banner.is-on { background: var(--surface); border-color: var(--border); }
+.push-banner.is-denied, .push-banner.is-unsupported, .push-banner.is-install { background: var(--surface-2); border-color: var(--border); }
+.push-text { flex: 1 1 260px; font-size: 13.5px; }
+.push-actions { display: flex; align-items: center; gap: 12px; }
+.push-banner.pulse { animation: pulse 1.2s ease 2; }
+@keyframes pulse { 50% { box-shadow: 0 0 0 4px var(--accent); } }
+@media (max-width: 600px) {
+  .rem-when .primary { flex: 1 1 100%; }
+  input[type="date"], input[type="time"] { font-size: 16px; }
+  .tabs .tab { font-size: 12px; padding: 11px 2px; }
+}

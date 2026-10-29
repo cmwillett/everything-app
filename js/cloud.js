@@ -5,6 +5,8 @@ import { firebaseConfig } from './firebase-config.js';
 export const SDK_VERSION = '13.1.0';
 const BASE = 'https://www.gstatic.com/firebasejs/' + SDK_VERSION + '/';
 
+import { vapidKey } from './push-config.js';
+
 export const configured = !!firebaseConfig.apiKey && !/^PASTE/.test(firebaseConfig.apiKey);
 
 let api = null;
@@ -30,4 +32,17 @@ export async function connect() {
   }
   api = { app, auth, db, a: authMod, f: fsMod };
   return api;
+}
+
+// Push notifications for reminders. Loaded only when needed, since not every
+// browser supports it (iPhone: only the Home Screen app, iOS 16.4+).
+let messagingApi = null;
+export async function messaging() {
+  if (messagingApi) return messagingApi;
+  const base = await connect();
+  const m = await import(BASE + 'firebase-messaging.js');
+  const supported = await m.isSupported().catch(() => false);
+  if (!supported) return null;
+  messagingApi = { m, messaging: m.getMessaging(base.app), vapidKey };
+  return messagingApi;
 }

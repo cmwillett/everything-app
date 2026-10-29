@@ -2,7 +2,7 @@
  * Offline support. Bump VERSION whenever you change any file listed in ASSETS
  * so installed copies pick up the new code on their next launch.
  */
-const VERSION = 'v4';
+const VERSION = 'v5';
 const CACHE = 'everything-app-' + VERSION;
 const ASSETS = [
   './',
@@ -14,6 +14,7 @@ const ASSETS = [
   './js/store.js',
   './js/cloud.js',
   './js/firebase-config.js',
+  './js/push-config.js',
   './manifest.webmanifest',
   './icons/icon.svg',
   './icons/icon-192.png',
@@ -22,7 +23,7 @@ const ASSETS = [
 ];
 // The Firebase SDK, so the app can start offline. Keep in step with cloud.js.
 const SDK = '13.1.0';
-const SDK_FILES = ['firebase-app.js', 'firebase-auth.js', 'firebase-firestore.js']
+const SDK_FILES = ['firebase-app.js', 'firebase-auth.js', 'firebase-firestore.js', 'firebase-messaging.js']
   .map((f) => 'https://www.gstatic.com/firebasejs/' + SDK + '/' + f);
 
 self.addEventListener('install', (event) => {
@@ -73,4 +74,42 @@ self.addEventListener('fetch', (event) => {
       .catch(() => caches.match(req, { ignoreSearch: true })
         .then((hit) => hit || (req.mode === 'navigate' ? caches.match('./index.html') : undefined)))
   );
+});
+
+/* ------------------------------------------------ reminder notifications -- */
+// The reminder sender (functions/index.js) sends a data-only push; showing
+// it is up to us. iPhone requires that every push shows a notification.
+self.addEventListener('push', (event) => {
+  let payload = {};
+  try { payload = event.data ? event.data.json() : {}; } catch (e) { payload = {}; }
+  const d = payload.data || payload.notification || payload;
+  const title = d.title || 'Reminder';
+  const options = {
+    body: d.body || '',
+    tag: d.reminderId || undefined,
+    renotify: !!d.reminderId,
+    icon: 'icons/icon-192.png',
+    badge: 'icons/icon-192.png',
+    timestamp: Number(d.dueAtMs) || Date.now(),
+    requireInteraction: true,
+    data: { url: './#reminders' }
+  };
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+// Tapping the notification opens (or focuses) the app on the Reminders tab.
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const target = new URL((event.notification.data && event.notification.data.url) || './', self.registration.scope).href;
+  event.waitUntil((async () => {
+    const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const w of wins) {
+      if (w.url.startsWith(self.registration.scope)) {
+        await w.focus();
+        if ('navigate' in w) { try { await w.navigate(target); } catch (e) { /* ignore */ } }
+        return;
+      }
+    }
+    await self.clients.openWindow(target);
+  })());
 });

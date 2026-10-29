@@ -20,7 +20,10 @@ const COLORS = ['yellow', 'green', 'blue', 'pink', 'purple', 'grey'];
 const TABLES = {
   tasks: { editable: ['name', 'notes', 'status', 'today', 'archived'], booleans: ['today', 'archived'] },
   notes: { editable: ['title', 'body', 'color'], booleans: [] },
-  links: { editable: ['title', 'url', 'category', 'notes'], booleans: [] }
+  links: { editable: ['title', 'url', 'category', 'notes'], booleans: [] },
+  // status / sentAt are written by the reminder sender (functions/index.js);
+  // they're carried through but never set from the edit form.
+  reminders: { editable: ['title', 'description', 'dueAtMs'], booleans: [], numbers: ['dueAtMs'], passthrough: ['status', 'sentAt'] }
 };
 const TABLE_NAMES = Object.keys(TABLES);
 
@@ -32,7 +35,7 @@ let unsubs = [];
 let changeHandler = function () {};
 let errorHandler = function (e) { console.error(e); };
 
-function empty() { return { tasks: [], notes: [], links: [] }; }
+function empty() { return { tasks: [], notes: [], links: [], reminders: [] }; }
 function uuid() {
   if (crypto && crypto.randomUUID) return crypto.randomUUID();
   return 'id-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
@@ -47,6 +50,7 @@ function defaultFor(table, field) {
   if (table === 'tasks' && field === 'status') return STATUSES[0];
   if (table === 'notes' && field === 'color') return COLORS[0];
   if (table === 'links' && field === 'category') return 'General';
+  if ((TABLES[table].numbers || []).indexOf(field) !== -1) return 0;
   return '';
 }
 
@@ -66,6 +70,10 @@ function sanitize(table, values) {
   config.editable.forEach(function (field) {
     if (values[field] === undefined || values[field] === null) return;
     if (config.booleans.indexOf(field) !== -1) clean[field] = isTrue(values[field]);
+    else if ((config.numbers || []).indexOf(field) !== -1) {
+      const n = Number(values[field]);
+      if (Number.isFinite(n)) clean[field] = n;
+    }
     else clean[field] = String(values[field]).slice(0, MAX_FIELD_LENGTH);
   });
   if (table === 'tasks' && clean.status !== undefined && STATUSES.indexOf(clean.status) === -1) clean.status = STATUSES[0];
@@ -88,6 +96,10 @@ function normalizeRecord(table, row, fallbackOrder) {
     updated: String(row.updated || now)
   };
   TABLES[table].editable.forEach(function (f) { rec[f] = clean[f] === undefined ? defaultFor(table, f) : clean[f]; });
+  (TABLES[table].passthrough || []).forEach(function (f) {
+    if (row[f] !== undefined && row[f] !== null) rec[f] = String(row[f]);
+  });
+  if (table === 'reminders' && !rec.status) rec.status = 'pending';
   return rec;
 }
 
@@ -97,7 +109,15 @@ function sorted(table) { return mirror[table].slice().sort(function (a, b) { ret
 function col(table) { return fb.f.collection(fb.db, 'users', uid, table); }
 function ref(table, id) { return fb.f.doc(fb.db, 'users', uid, table, id); }
 function settingsRef() { return fb.f.doc(fb.db, 'users', uid, 'meta', 'settings'); }
-function body(rec) { const o = Object.assign({}, rec); delete o.id; return o; }
+// nextAtMs is what the reminder sender looks for: present only while a
+// reminder is still waiting to go out.
+function body(table, rec) {
+  const o = Object.assign({}, rec);
+  delete o.id;
+  if (table === 'reminders' && rec.status === 'pending') o.nextAtMs = rec.dueAtMs;
+  return o;
+}
+function deviceRef(id) { return fb.f.doc(fb.db, 'users', uid, 'devices', id); }
 
 // Writes are fire-and-forget: offline they wait in Firestore's queue, and a
 // rejection (e.g. rules) is reported rather than thrown at the caller.
@@ -199,7 +219,7 @@ export const Store = {
     const now = new Date().toISOString();
     const rec = normalizeRecord(table, Object.assign({}, values, { id: uuid(), sortOrder: top, created: now, updated: now }));
     list.push(rec);
-    send(fb.f.setDoc(ref(table, rec.id), body(rec)));
+    send(fb.f.setDoc(ref(table, rec.id), body(table, rec)));
     return clone(rec);
   },
 
@@ -209,8 +229,17 @@ export const Store = {
     if (!item) throw new Error('That item no longer exists — it may have been deleted on another device.');
     const clean = sanitize(table, values || {});
     clean.updated = new Date().toISOString();
+    const write = Object.assign({}, clean);
+    if (table === 'reminders' && clean.dueAtMs !== undefined) {
+      // A new time re-arms it, even if it had already gone off.
+      clean.status = 'pending';
+      write.status = 'pending';
+      write.nextAtMs = clean.dueAtMs;
+      write.sentAt = fb.f.deleteField();
+      delete item.sentAt;
+    }
     Object.assign(item, clean);
-    send(fb.f.setDoc(ref(table, id), clean, { merge: true }));
+    send(fb.f.setDoc(ref(table, id), write, { merge: true }));
     return clone(item);
   },
 
@@ -234,6 +263,16 @@ export const Store = {
     });
     if (ops.length) send(commitInBatches(ops));
     return true;
+  },
+
+  /* ---- devices that get reminder notifications ---- */
+  registerDevice(token, label) {
+    assertSignedIn();
+    return fb.f.setDoc(deviceRef(token), { token: token, label: String(label || '').slice(0, 200), updated: new Date().toISOString() });
+  },
+  unregisterDevice(token) {
+    assertSignedIn();
+    return fb.f.deleteDoc(deviceRef(token));
   },
 
   /* ---- per-person settings (daily checklist) ---- */
@@ -261,8 +300,13 @@ export const Store = {
     const counts = {};
     TABLE_NAMES.forEach(function (table) {
       mirror[table].forEach(function (item) { ops.push(function (b) { b.delete(ref(table, item.id)); }); });
-      const rows = (Array.isArray(data[table]) ? data[table] : []).map(function (row, i) { return normalizeRecord(table, row, i); });
-      rows.forEach(function (rec) { ops.push(function (b) { b.set(ref(table, rec.id), body(rec)); }); });
+      const rows = (Array.isArray(data[table]) ? data[table] : []).map(function (row, i) {
+        const rec = normalizeRecord(table, row, i);
+        // Don't fire a pile of old reminders the moment a backup is restored.
+        if (table === 'reminders' && rec.status === 'pending' && rec.dueAtMs < Date.now()) rec.status = 'sent';
+        return rec;
+      });
+      rows.forEach(function (rec) { ops.push(function (b) { b.set(ref(table, rec.id), body(table, rec)); }); });
       mirror[table] = rows;
       counts[table] = rows.length;
     });
@@ -288,7 +332,7 @@ export const Store = {
         const rec = normalizeRecord(table, row, i);
         const existing = mirror[table].findIndex(function (m) { return m.id === rec.id; });
         if (existing === -1) mirror[table].push(rec); else mirror[table][existing] = rec;
-        ops.push(function (b) { b.set(ref(table, rec.id), body(rec), { merge: true }); });
+        ops.push(function (b) { b.set(ref(table, rec.id), body(table, rec), { merge: true }); });
       });
     });
     send(commitInBatches(ops));

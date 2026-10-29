@@ -13,6 +13,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="Everything">
   <link rel="stylesheet" href="css/styles.css">
+  <script src="js/version.js"></script>
   <script src="js/appearance.js"></script>
 </head>
 <body>
@@ -51,9 +52,10 @@
 
   <div class="shell" hidden>
     <header class="topbar">
-      <h1>Everything App</h1>
+      <h1>Everything App <span class="app-version" id="app-version"></span></h1>
       <div class="topbar-actions">
         <button type="button" id="install" class="ghost" hidden>Install</button>
+        <button type="button" id="help-open" class="help-btn" aria-label="Help" title="How this app works">?</button>
         <span id="net" class="net-badge" hidden title="Changes are saved on this device and will sync when you're back online">Offline</span>
         <details class="menu">
           <summary class="avatar" aria-label="Account menu"><span id="account-initial">?</span></summary>
@@ -162,6 +164,83 @@
       </section>
     </main>
   </div>
+
+  <dialog id="help" class="help-dialog">
+    <div class="dialog-inner">
+      <div class="help-head">
+        <h2>How Everything App works</h2>
+        <button type="button" class="icon-btn" id="help-close" aria-label="Close">✕</button>
+      </div>
+      <p class="hint">Tap a topic to open it. Everything you add saves by itself and shows up on your other devices within a second or two.</p>
+
+      <details class="help-item" open>
+        <summary>🏠 Home</summary>
+        <p>Your overview. The boxes at the top count your tasks, reminders, links and notes — tap one to jump there.</p>
+        <p><strong>Daily checklist</strong> is a short routine that un-checks itself every morning. Tap <em>Edit</em> to change the items.</p>
+        <p>Below that you can see what's on for <strong>Today</strong> (and Later / Archived), and your latest notes and lists.</p>
+      </details>
+
+      <details class="help-item">
+        <summary>✅ Tasks</summary>
+        <p>Type a task name, add details if you like (bold, lists and links work), and tap <strong>Add task</strong>.</p>
+        <ul>
+          <li><strong>☆ / ★</strong> moves a task into <strong>Today</strong> or back to <strong>Later</strong>.</li>
+          <li>The status menu marks it To Do, In Progress, Blocked or Done.</li>
+          <li><strong>⇩</strong> archives a finished task (out of the way, not deleted); <strong>⇧</strong> brings it back.</li>
+          <li><strong>✎</strong> edits, <strong>✕</strong> deletes, and dragging the <strong>⠿</strong> handle reorders.</li>
+          <li>The chips above the list (All, To Do…) filter by status.</li>
+        </ul>
+      </details>
+
+      <details class="help-item">
+        <summary>🔔 Reminders</summary>
+        <p>Write what to remember, pick a date and time, and tap <strong>Add reminder</strong>. At that time a notification pops up on every phone where you've turned notifications on — even if the app is closed.</p>
+        <ul>
+          <li>You can create reminders on any device (like your computer); they still arrive on your phone.</li>
+          <li>Sent reminders move to <strong>Sent</strong>. Tap <strong>↻</strong> to set one again.</li>
+          <li>Notifications are turned on <em>per device</em>. Use the bar on this tab, or the round account menu → <em>Turn on notifications here</em>. Don't want them on this device? Tap <em>Not on this device</em>.</li>
+          <li><strong>iPhone:</strong> notifications only work in the Home Screen app (see “Install it on your phone” below).</li>
+          <li>Account menu → <em>Send a test notification</em> checks everything's working.</li>
+        </ul>
+      </details>
+
+      <details class="help-item">
+        <summary>🔗 Links</summary>
+        <p>Save websites you use a lot. Give it a label, the address, and a category (e.g. School, Bills) — links are grouped by category. Tap a link to open it.</p>
+      </details>
+
+      <details class="help-item">
+        <summary>📝 Notes &amp; lists</summary>
+        <p><strong>＋ New note</strong> makes a sticky note. Tap it to type — a formatting bar (bold, italic, bullets, links…) appears while you're editing.</p>
+        <p><strong>☑ New list</strong> makes a checklist. Type in “Add an item” and press Enter to keep adding. Tap a box to check something off — it's crossed out and moves to the bottom. <em>Clear checked</em> removes finished items.</p>
+        <p>The coloured dots change a card's colour, <strong>⠿</strong> drags it, <strong>✕</strong> deletes it.</p>
+      </details>
+
+      <details class="help-item">
+        <summary>🎨 Make it yours</summary>
+        <p>Tap the round button with your initial (top right) → <strong>Appearance</strong>. Pick a theme (Blush, Lavender, Peach…), light or dark, an accent colour, a background (hearts!) and a rounded font. It's saved to your account, so it follows you to your other devices and doesn't change anyone else's.</p>
+      </details>
+
+      <details class="help-item">
+        <summary>📱 Install it on your phone</summary>
+        <ul>
+          <li><strong>iPhone:</strong> open the site in Safari → Share button → <em>Add to Home Screen</em>. Then open it from the Home Screen and sign in there.</li>
+          <li><strong>Android:</strong> Chrome menu (⋮) → <em>Add to Home screen</em> / <em>Install app</em>.</li>
+        </ul>
+      </details>
+
+      <details class="help-item">
+        <summary>🔒 Accounts, privacy &amp; backups</summary>
+        <p>Everyone signs in with their own account and only ever sees their own things. It works offline too — changes catch up when you're back online.</p>
+        <p>Account menu → <em>Export backup</em> saves a copy of everything to a file; <em>Import backup</em> restores one (it replaces what's there). <em>Sign out</em> also stops this device getting your reminders.</p>
+      </details>
+
+      <p class="help-version" id="help-version"></p>
+      <footer class="dialog-actions">
+        <button type="button" class="primary" id="help-done">Got it</button>
+      </footer>
+    </div>
+  </dialog>
 
   <dialog id="appearance" class="appearance-dialog">
     <div class="dialog-inner">

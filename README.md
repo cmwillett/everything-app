@@ -116,7 +116,7 @@ All paths are relative, so it works from a sub-folder like that without changes.
 | Change the default daily checklist | `DEFAULT_DAILY` in `js/app.js` (or just tap **Edit** on Home) |
 | Colours / layout | `css/styles.css` |
 
-**After changing any file, bump `VERSION` in `sw.js`** (e.g. `v3` → `v4`) so installed copies pick up the update.
+**After changing any file, bump the version in `js/version.js`** (e.g. `v9` → `v10`). It's shown next to the title, and installed copies pick up the update when it changes.
 
 ## Files
 

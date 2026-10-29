@@ -1,12 +1,14 @@
 /*
- * Offline support. Bump VERSION whenever you change any file listed in ASSETS
- * so installed copies pick up the new code on their next launch.
+ * Offline support. The version lives in js/version.js; bumping it there makes
+ * installed copies pick up the new code on their next launch.
  */
-const VERSION = 'v8';
+importScripts('./js/version.js');
+const VERSION = self.APP_VERSION;
 const CACHE = 'everything-app-' + VERSION;
 const ASSETS = [
   './',
   './index.html',
+  './js/version.js',
   './css/styles.css',
   './js/markdown.js',
   './js/richtext.js',

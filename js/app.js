@@ -688,6 +688,7 @@ import { messaging } from './cloud.js';
     var token = await getPushToken();
     await Store.registerDevice(token, deviceLabel());
     saveToken(token);
+    setBannerDismissed(false);
     renderPushBanner();
     toast('Notifications are on for this device');
   }
@@ -776,6 +777,8 @@ import { messaging } from './cloud.js';
     renderPushMenu(st);
     // Once it's on there's nothing to say; the controls live in the account menu.
     if (st === 'on') return;
+    // Dismissed on this device: stay quiet (the account menu can still turn it on).
+    if (bannerDismissed()) return;
     if (st === 'off') {
       text.appendChild(el('strong', null, 'Turn on notifications'));
       text.appendChild(el('span', null, ' so reminders pop up on this device, even when the app is closed.'));
@@ -792,9 +795,20 @@ import { messaging } from './cloud.js';
       text.appendChild(el('strong', null, 'This browser can\'t show notifications.'));
       text.appendChild(el('span', null, ' Reminders will still sync — turn notifications on from your phone or another browser.'));
     }
+    button('Not on this device', 'link-btn push-dismiss', function () {
+      setBannerDismissed(true);
+      renderPushBanner();
+      toast('OK — you can still turn them on from the account menu');
+    });
     box.appendChild(text);
     box.appendChild(actions);
     host.appendChild(box);
+  }
+
+  function dismissKey() { return 'everything-app:push-dismissed:' + (currentUid || ''); }
+  function bannerDismissed() { try { return localStorage.getItem(dismissKey()) === '1'; } catch (e) { return false; } }
+  function setBannerDismissed(on) {
+    try { if (on) localStorage.setItem(dismissKey(), '1'); else localStorage.removeItem(dismissKey()); } catch (e) { /* ignore */ }
   }
 
   /* ------------------------------------------------------------ links -- */
@@ -1105,6 +1119,16 @@ import { messaging } from './cloud.js';
     draw();
     return wrap;
   }
+
+  /* ------------------------------------------------- help & version -- */
+  var APP_VERSION = window.APP_VERSION || '';
+  document.getElementById('app-version').textContent = APP_VERSION;
+  document.getElementById('help-version').textContent = 'You\u2019re on version ' + APP_VERSION + '.';
+  var helpDialog = document.getElementById('help');
+  document.getElementById('help-open').addEventListener('click', function () { helpDialog.showModal(); });
+  document.getElementById('help-close').addEventListener('click', function () { helpDialog.close(); });
+  document.getElementById('help-done').addEventListener('click', function () { helpDialog.close(); });
+  helpDialog.addEventListener('click', function (e) { if (e.target === helpDialog) helpDialog.close(); });
 
   /* ------------------------------------------------------ appearance -- */
   var appearanceDialog = document.getElementById('appearance');

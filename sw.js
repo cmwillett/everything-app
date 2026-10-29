@@ -26,7 +26,7 @@ const ASSETS = [
 ];
 // The Firebase SDK, so the app can start offline. Keep in step with cloud.js.
 const SDK = '13.1.0';
-const SDK_FILES = ['firebase-app.js', 'firebase-auth.js', 'firebase-firestore.js', 'firebase-messaging.js']
+const SDK_FILES = ['firebase-app.js', 'firebase-auth.js', 'firebase-firestore.js', 'firebase-messaging.js', 'firebase-functions.js']
   .map((f) => 'https://www.gstatic.com/firebasejs/' + SDK + '/' + f);
 
 self.addEventListener('install', (event) => {

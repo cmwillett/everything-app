@@ -65,6 +65,7 @@
               <span id="account-email"></span>
             </div>
             <div id="menu-push"></div>
+            <button type="button" id="admin-open" hidden>📊 Admin dashboard</button>
             <button type="button" id="appearance-open">🎨 Appearance…</button>
             <button type="button" id="export">Export backup (.json)</button>
             <button type="button" id="import">Import backup…</button>
@@ -239,6 +240,20 @@
       <footer class="dialog-actions">
         <button type="button" class="primary" id="help-done">Got it</button>
       </footer>
+    </div>
+  </dialog>
+
+  <dialog id="admin" class="admin-dialog">
+    <div class="dialog-inner">
+      <div class="help-head">
+        <h2>📊 Admin dashboard</h2>
+        <div class="admin-head-actions">
+          <button type="button" class="ghost" id="admin-refresh">Refresh</button>
+          <button type="button" class="icon-btn" id="admin-close" aria-label="Close">✕</button>
+        </div>
+      </div>
+      <p class="hint">Counts only — nobody's actual tasks, notes or reminders are shown here.</p>
+      <div id="admin-body"></div>
     </div>
   </dialog>
 

@@ -1,5 +1,5 @@
 import { Store } from './store.js';
-import { messaging } from './cloud.js';
+import { messaging, adminStats } from './cloud.js';
 
 (function () {
   'use strict';
@@ -1130,6 +1130,114 @@ import { messaging } from './cloud.js';
   document.getElementById('help-done').addEventListener('click', function () { helpDialog.close(); });
   helpDialog.addEventListener('click', function (e) { if (e.target === helpDialog) helpDialog.close(); });
 
+  /* ----------------------------------------------------------- admin -- */
+  // Only decides whether to show the menu item; the server does the real check.
+  var ADMIN_EMAILS = ['craig.willett@gmail.com'];
+  var adminDialog = document.getElementById('admin');
+
+  function isAdmin(user) {
+    return !!user && !!user.email && ADMIN_EMAILS.indexOf(user.email.toLowerCase()) !== -1;
+  }
+
+  function fmtWhen(value) {
+    if (!value) return '—';
+    var d = new Date(value);
+    if (isNaN(d)) return '—';
+    var mins = Math.round((Date.now() - d.getTime()) / 60000);
+    if (mins < 2) return 'just now';
+    if (mins < 60) return mins + ' min ago';
+    var days = Math.round((startOfDay(Date.now()) - startOfDay(d.getTime())) / 86400000);
+    var time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    if (days === 0) return 'today ' + time;
+    if (days === 1) return 'yesterday ' + time;
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: d.getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
+  }
+
+  function n(v) { return v == null ? '?' : String(v); }
+
+  function statTile(icon, label, total, today, extra) {
+    var t = el('div', 'admin-stat');
+    var top = el('div', 'admin-stat-top');
+    top.appendChild(el('span', 'admin-stat-num', n(total)));
+    if (today) top.appendChild(el('span', 'admin-stat-today', '+' + today + ' today'));
+    t.appendChild(top);
+    t.appendChild(el('div', 'admin-stat-label', icon + ' ' + label));
+    if (extra) t.appendChild(el('div', 'admin-stat-extra', extra));
+    return t;
+  }
+
+  function renderAdmin(data) {
+    var host = clear(document.getElementById('admin-body'));
+    var users = data.users || [];
+    var sum = function (f) { return users.reduce(function (a, u) { return a + (Number(f(u)) || 0); }, 0); };
+
+    var totals = el('div', 'admin-totals');
+    [['Accounts', users.length],
+      ['Tasks', sum(function (u) { return u.tasks.total; })],
+      ['Notes & lists', sum(function (u) { return u.notes.total; })],
+      ['Reminders', sum(function (u) { return u.reminders.total; })],
+      ['Added today', sum(function (u) { return u.tasks.today + u.notes.today + u.reminders.today + u.links.today; })]
+    ].forEach(function (p) {
+      var b = el('div', 'admin-total');
+      b.appendChild(el('div', 'admin-total-num', String(p[1])));
+      b.appendChild(el('div', 'admin-total-label', p[0]));
+      totals.appendChild(b);
+    });
+    host.appendChild(totals);
+
+    users.forEach(function (u) {
+      var card = el('div', 'admin-user');
+      var head = el('div', 'admin-user-head');
+      var avatar = el('span', 'admin-avatar', ((u.name || u.email || '?').trim()[0] || '?').toUpperCase());
+      head.appendChild(avatar);
+      var who = el('div', 'admin-who');
+      who.appendChild(el('div', 'admin-name', u.name || (u.email || '').split('@')[0] || '(no name)'));
+      who.appendChild(el('div', 'admin-email', u.email + (u.provider === 'google.com' ? ' · Google' : ' · email & password')));
+      head.appendChild(who);
+      var seen = el('div', 'admin-seen');
+      seen.appendChild(el('div', null, 'Active ' + fmtWhen(u.lastSignIn)));
+      seen.appendChild(el('div', 'admin-joined', 'Joined ' + fmtWhen(u.created)));
+      head.appendChild(seen);
+      card.appendChild(head);
+
+      var grid = el('div', 'admin-stats');
+      grid.appendChild(statTile('✅', 'Tasks', u.tasks.total, u.tasks.today,
+        n(u.tasks.inToday) + ' in Today · ' + n(u.tasks.done) + ' done · ' + n(u.tasks.archived) + ' archived'));
+      grid.appendChild(statTile('📝', 'Notes & lists', u.notes.total, u.notes.today,
+        n(u.notes.lists) + ' list' + (u.notes.lists === 1 ? '' : 's')));
+      grid.appendChild(statTile('🔔', 'Reminders', u.reminders.total, u.reminders.today,
+        n(u.reminders.upcoming) + ' upcoming'));
+      grid.appendChild(statTile('🔗', 'Links', u.links.total, u.links.today, ''));
+      grid.appendChild(statTile('📱', 'Notified devices', u.devices, 0, u.devices ? 'getting reminders' : 'notifications off'));
+      card.appendChild(grid);
+      host.appendChild(card);
+    });
+    host.appendChild(el('p', 'hint admin-foot', 'Updated ' + fmtWhen(data.generatedAt) +
+      '. "Today" means since midnight Eastern. Counts are what exists now — deleted items aren\u2019t counted.'));
+  }
+
+  function loadAdmin() {
+    var host = clear(document.getElementById('admin-body'));
+    host.appendChild(el('p', 'empty', 'Loading…'));
+    var btn = document.getElementById('admin-refresh');
+    btn.disabled = true;
+    adminStats().then(renderAdmin).catch(function (e) {
+      clear(host).appendChild(el('p', 'admin-error',
+        (e && e.code && /permission-denied/.test(e.code)) ? 'Only the app admin can see this page.'
+          : (e && /not-found|internal/.test(e.code || '') ? 'The admin function isn\u2019t deployed yet — run: firebase deploy --only functions'
+            : 'Couldn\u2019t load the numbers: ' + (e && e.message ? e.message : e))));
+    }).finally(function () { btn.disabled = false; });
+  }
+
+  document.getElementById('admin-open').addEventListener('click', function () {
+    closeMenu();
+    adminDialog.showModal();
+    loadAdmin();
+  });
+  document.getElementById('admin-refresh').addEventListener('click', loadAdmin);
+  document.getElementById('admin-close').addEventListener('click', function () { adminDialog.close(); });
+  adminDialog.addEventListener('click', function (e) { if (e.target === adminDialog) adminDialog.close(); });
+
   /* ------------------------------------------------------ appearance -- */
   var appearanceDialog = document.getElementById('appearance');
   var appearanceSaveTimer = null;
@@ -1570,6 +1678,7 @@ import { messaging } from './cloud.js';
     document.getElementById('account-name').textContent = label;
     document.getElementById('account-email').textContent = user.email || '';
     document.getElementById('account-initial').textContent = (label.trim()[0] || '?').toUpperCase();
+    document.getElementById('admin-open').hidden = !isAdmin(user);
   }
 
   var currentUid = null;
@@ -1584,6 +1693,8 @@ import { messaging } from './cloud.js';
           Store.stop();
           state.tasks = []; state.notes = []; state.links = []; state.reminders = [];
           if (appearanceDialog.open) appearanceDialog.close();
+          if (adminDialog.open) adminDialog.close();
+          document.getElementById('admin-open').hidden = true;
           Appearance.reset();
           setAuthMode('signin');
           document.getElementById('auth-password').value = '';

@@ -46,3 +46,12 @@ export async function messaging() {
   messagingApi = { m, messaging: m.getMessaging(base.app), vapidKey };
   return messagingApi;
 }
+
+// Admin dashboard numbers (only works for the admin account — the server checks).
+export async function adminStats() {
+  const base = await connect();
+  const fn = await import(BASE + 'firebase-functions.js');
+  const functions = fn.getFunctions(base.app, 'us-central1');
+  const res = await fn.httpsCallable(functions, 'adminStats')();
+  return res.data;
+}

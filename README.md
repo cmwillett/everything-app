@@ -7,6 +7,7 @@ A small, installable to-do and notes app that syncs across devices — the **Hom
 - **Links** — bookmarks grouped by category (type a new category or pick an existing one). Edit, delete and drag to reorder within a category.
 - **Notebook** — sticky-note cards in six colours with a simple formatting bar (bold, italic, underline, lists, links). Autosave, drag to reorder.
 - **Home** — the overview: counts, a daily checklist that resets every morning, Today / Later / Archived at a glance (you can star/unstar right there), and your latest notes, plus link and note counts.
+- **Admin dashboard** — for the admin account only (set in `functions/index.js` → `ADMIN_EMAILS`, and `js/app.js` → `ADMIN_EMAILS` to show the menu item): per-account counts of tasks, notes, lists, reminders and links, plus what was added today. It never shows anyone's actual content.
 - **Offline + installable** — a service worker caches the app; add it to your home screen or install it from Chrome/Edge.
 
 No build step, no framework, no server. It's just HTML, CSS and JavaScript.

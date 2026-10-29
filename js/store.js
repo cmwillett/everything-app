@@ -26,25 +26,29 @@
     notes: {
       editable: ['title', 'body', 'color'],
       booleans: []
+    },
+    links: {
+      editable: ['title', 'url', 'category', 'notes'],
+      booleans: []
     }
   };
+  var TABLE_NAMES = Object.keys(TABLES);
 
   function uuid() {
     if (global.crypto && crypto.randomUUID) return crypto.randomUUID();
     return 'id-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
   }
 
-  function empty() { return { tasks: [], notes: [] }; }
+  function empty() { return { tasks: [], notes: [], links: [] }; }
 
   function read() {
     try {
       var raw = localStorage.getItem(KEY);
       if (!raw) return empty();
       var data = JSON.parse(raw);
-      return {
-        tasks: Array.isArray(data.tasks) ? data.tasks : [],
-        notes: Array.isArray(data.notes) ? data.notes : []
-      };
+      var out = empty();
+      TABLE_NAMES.forEach(function (t) { if (Array.isArray(data[t])) out[t] = data[t]; });
+      return out;
     } catch (e) {
       return empty();
     }
@@ -72,6 +76,7 @@
     if (TABLES[table].booleans.indexOf(field) !== -1) return false;
     if (table === 'tasks' && field === 'status') return STATUSES[0];
     if (table === 'notes' && field === 'color') return COLORS[0];
+    if (table === 'links' && field === 'category') return 'General';
     return '';
   }
 
@@ -89,7 +94,21 @@
     if (table === 'notes' && clean.color !== undefined && COLORS.indexOf(clean.color) === -1) {
       clean.color = COLORS[0];
     }
+    if (table === 'links') {
+      if (clean.url !== undefined) clean.url = normalizeUrl(clean.url);
+      if (clean.category !== undefined && !clean.category.trim()) clean.category = 'General';
+    }
     return clean;
+  }
+
+  // Anything that isn't plainly http(s) is dropped, so a stored
+  // "javascript:" value can never become a live link.
+  function normalizeUrl(raw) {
+    var url = String(raw).trim();
+    if (!url) return '';
+    if (/^https?:\/\//i.test(url)) return url;
+    if (/^[a-z][a-z0-9+.\-]*:/i.test(url)) return '';
+    return 'https://' + url;
   }
 
   function sorted(table) {
@@ -103,7 +122,9 @@
     COLORS: COLORS,
 
     loadAll: function () {
-      return { tasks: clone(sorted('tasks')), notes: clone(sorted('notes')) };
+      var out = {};
+      TABLE_NAMES.forEach(function (t) { out[t] = clone(sorted(t)); });
+      return out;
     },
 
     // New items go to the top, same as the original.
@@ -156,7 +177,7 @@
 
     exportJson: function () {
       return JSON.stringify({ app: 'everything-app', version: 1,
-        exported: new Date().toISOString(), tasks: db.tasks, notes: db.notes }, null, 2);
+        exported: new Date().toISOString(), tasks: db.tasks, notes: db.notes, links: db.links }, null, 2);
     },
 
     // Replaces everything. Each row is re-sanitized so a hand-edited file
@@ -167,8 +188,9 @@
         throw new Error('That file is not an Everything App backup.');
       }
       var next = empty();
-      ['tasks', 'notes'].forEach(function (table) {
-        data[table].forEach(function (row, i) {
+      TABLE_NAMES.forEach(function (table) {
+        // Older backups have no links — that's fine.
+        (Array.isArray(data[table]) ? data[table] : []).forEach(function (row, i) {
           var clean = sanitize(table, row || {});
           var rec = {
             id: String(row.id || uuid()),
@@ -184,7 +206,7 @@
       });
       db = next;
       persist();
-      return { tasks: db.tasks.length, notes: db.notes.length };
+      return { tasks: db.tasks.length, notes: db.notes.length, links: db.links.length };
     },
 
     // Another tab of the app wrote — pick up its copy.

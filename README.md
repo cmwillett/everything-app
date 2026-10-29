@@ -1,10 +1,11 @@
 # Everything App
 
-A small, installable to-do and notes app — the **Home**, **Tasks** and **Notebook** pages from my Apps Script "Everything App", rebuilt as a plain static Progressive Web App.
+A small, installable to-do and notes app — the **Home**, **Tasks**, **Links** and **Notebook** pages from my Apps Script "Everything App", rebuilt as a plain static Progressive Web App.
 
 - **Tasks** — add a task (with optional Markdown notes), set a status (To Do / In Progress / Blocked / Done), and tap ☆ to move it into **Today**; everything else waits in **Later**. Archive finished work (⇩), restore it (⇧), edit (✎), delete (✕) and drag the ⠿ handle to reorder.
+- **Links** — bookmarks grouped by category (type a new category or pick an existing one). Edit, delete and drag to reorder within a category.
 - **Notebook** — sticky-note cards in six colours. Autosave, Markdown preview, drag to reorder.
-- **Home** — the overview: counts, a daily checklist that resets every morning, Today / Later / Archived at a glance (you can star/unstar right there), and your latest notes.
+- **Home** — the overview: counts, a daily checklist that resets every morning, Today / Later / Archived at a glance (you can star/unstar right there), and your latest notes, plus link and note counts.
 - **Offline + installable** — a service worker caches the app; add it to your home screen or install it from Chrome/Edge.
 
 No build step, no framework, no server. It's just HTML, CSS and JavaScript.

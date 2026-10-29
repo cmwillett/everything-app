@@ -10,7 +10,7 @@
   var DEFAULT_DAILY = ['Review Tasks', 'Move any Notes into Tasks if needed'];
 
   var state = {
-    tasks: [], notes: [],
+    tasks: [], notes: [], links: [],
     statuses: Store.STATUSES,
     colors: Store.COLORS,
     tab: 'home',
@@ -133,7 +133,7 @@
   }
 
   /* ------------------------------------------------------------- tabs -- */
-  var TABS = ['home', 'tasks', 'notebook'];
+  var TABS = ['home', 'tasks', 'links', 'notebook'];
   function showTab(name, fromHash) {
     if (TABS.indexOf(name) === -1) name = 'home';
     state.tab = name;
@@ -342,6 +342,7 @@
       stats.appendChild(statCard(live.filter(function (t) { return t.status === status; }).length,
         status, 'tasks', status));
     });
+    stats.appendChild(statCard(state.links.length, 'Links', 'links', null));
     stats.appendChild(statCard(state.notes.length, 'Notes', 'notebook', null));
 
     var buckets = [
@@ -525,6 +526,79 @@
     ], function (values) { update('tasks', id, values); });
   }
 
+  /* ------------------------------------------------------------ links -- */
+  function isSafeUrl(url) { return /^https?:\/\//i.test(String(url || '')); }
+
+  function groupLinks() {
+    var groups = {};
+    state.links.forEach(function (link) {
+      var c = link.category || 'General';
+      (groups[c] || (groups[c] = [])).push(link);
+    });
+    return groups;
+  }
+
+  function renderLinks() {
+    var host = clear(document.getElementById('link-groups'));
+    var groups = groupLinks();
+    var categories = Object.keys(groups).sort(function (a, b) { return a.localeCompare(b); });
+    var datalist = clear(document.getElementById('link-categories'));
+    categories.forEach(function (c) { var o = el('option'); o.value = c; datalist.appendChild(o); });
+    if (!categories.length) { host.appendChild(el('p', 'empty', 'No links yet. Add one above.')); return; }
+    categories.forEach(function (category) {
+      var head = el('h3', 'group-head');
+      head.appendChild(document.createTextNode(category + ' '));
+      head.appendChild(el('span', 'group-count', String(groups[category].length)));
+      host.appendChild(head);
+      var list = el('div', 'list');
+      groups[category].forEach(function (link) { list.appendChild(linkRow(link, list)); });
+      host.appendChild(list);
+    });
+  }
+
+  function linkRow(link, list) {
+    var row = el('div', 'row');
+    row.dataset.id = link.id;
+    var handle = el('span', 'handle', '⠿');
+    handle.title = 'Drag to reorder';
+    row.appendChild(handle);
+    var main = el('div', 'row-main');
+    if (isSafeUrl(link.url)) {
+      var a = el('a', 'row-title', link.title || link.url);
+      a.href = link.url;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      main.appendChild(a);
+      var host = '';
+      try { host = new URL(link.url).hostname.replace(/^www\./, ''); } catch (e) { /* ignore */ }
+      if (host && link.title) main.appendChild(el('div', 'row-host', host));
+    } else {
+      main.appendChild(el('div', 'row-title', link.title || '(no title)'));
+    }
+    if (link.notes) main.appendChild(el('div', 'row-sub', link.notes));
+    row.appendChild(main);
+    var actions = el('div', 'row-actions');
+    actions.appendChild(iconButton('Edit', '✎', function () { editLink(link.id); }));
+    actions.appendChild(iconButton('Delete', '✕', function () { remove('links', link.id, link.title); }, true));
+    row.appendChild(actions);
+    attachHandle(row, handle, list, '.row', 'links', false);
+    return row;
+  }
+
+  function editLink(id) {
+    var link = byId(state.links, id);
+    if (!link) return;
+    openEditor('Edit link', [
+      { name: 'title', label: 'Label', value: link.title },
+      { name: 'url', label: 'URL', value: link.url },
+      { name: 'category', label: 'Category', value: link.category },
+      { name: 'notes', label: 'Description', type: 'textarea', value: link.notes }
+    ], function (values) {
+      if (!values.url.trim()) { toast('A URL is required', true); return; }
+      update('links', id, values);
+    });
+  }
+
   /* --------------------------------------------------------- notebook -- */
   function renderNotes() {
     var grid = clear(document.getElementById('note-grid'));
@@ -647,6 +721,7 @@
   function rerender(table) {
     if (table === 'tasks') renderTasks();
     if (table === 'notes') renderNotes();
+    if (table === 'links') renderLinks();
     if (state.tab === 'home') renderHome();
   }
 
@@ -668,7 +743,7 @@
       try {
         var counts = Store.importJson(String(reader.result));
         load();
-        toast('Imported ' + counts.tasks + ' tasks and ' + counts.notes + ' notes');
+        toast('Imported ' + counts.tasks + ' tasks, ' + counts.links + ' links and ' + counts.notes + ' notes');
       } catch (e) { fail(e); }
     };
     reader.readAsText(file);
@@ -680,7 +755,9 @@
     var data = Store.loadAll();
     state.tasks = data.tasks;
     state.notes = data.notes;
+    state.links = data.links;
     renderTasks();
+    renderLinks();
     renderNotes();
     renderHome();
   }
@@ -709,6 +786,26 @@
     input.value = '';
     taskNotes.value = '';
     input.focus();
+  });
+
+  document.getElementById('link-add').addEventListener('submit', function (event) {
+    event.preventDefault();
+    var title = document.getElementById('link-add-title');
+    var url = document.getElementById('link-add-url');
+    var category = document.getElementById('link-add-category');
+    var notes = document.getElementById('link-add-notes');
+    if (!url.value.trim()) { toast('A URL is required', true); url.focus(); return; }
+    if (/^[a-z][a-z0-9+.\-]*:/i.test(url.value.trim()) && !isSafeUrl(url.value.trim())) {
+      toast('Only http(s) links are allowed', true); url.focus(); return;
+    }
+    create('links', {
+      title: title.value.trim() || url.value.trim(),
+      url: url.value.trim(),
+      category: category.value.trim() || 'General',
+      notes: notes.value.trim()
+    });
+    title.value = ''; url.value = ''; notes.value = '';
+    title.focus();
   });
 
   document.getElementById('note-add').addEventListener('click', function () {

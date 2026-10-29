@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Everything App</title>
-  <meta name="description" content="Tasks and notes — Today, Later and a Notebook. Works offline.">
+  <meta name="description" content="Tasks, links and notes — Today, Later and a Notebook. Works offline.">
   <meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#14161a" media="(prefers-color-scheme: dark)">
   <link rel="manifest" href="manifest.webmanifest">
@@ -35,6 +35,7 @@
     <nav class="tabs" role="tablist">
       <button type="button" class="tab" role="tab" data-tab="home">Home</button>
       <button type="button" class="tab" role="tab" data-tab="tasks">Tasks</button>
+      <button type="button" class="tab" role="tab" data-tab="links">Links</button>
       <button type="button" class="tab" role="tab" data-tab="notebook">Notebook</button>
     </nav>
 
@@ -75,6 +76,21 @@
         </form>
         <div class="filters" id="task-filters"></div>
         <div id="task-list"></div>
+      </section>
+
+      <!-- --------------------------------------------------------- LINKS -->
+      <section class="view" data-view="links">
+        <form class="quick-add" id="link-add" novalidate>
+          <div class="quick-add-row">
+            <input type="text" id="link-add-title" placeholder="Label" autocomplete="off">
+            <input type="url" id="link-add-url" placeholder="URL" autocomplete="off" inputmode="url" autocapitalize="off">
+            <input type="text" id="link-add-category" placeholder="Category" autocomplete="off" list="link-categories">
+            <datalist id="link-categories"></datalist>
+            <button type="submit" class="primary">Add</button>
+          </div>
+          <textarea id="link-add-notes" class="quick-add-notes is-short" placeholder="Description (optional)"></textarea>
+        </form>
+        <div id="link-groups"></div>
       </section>
 
       <!-- ------------------------------------------------------ NOTEBOOK -->

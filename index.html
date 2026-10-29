@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Everything App</title>
+  <meta name="description" content="Tasks and notes — Today, Later and a Notebook. Works offline.">
+  <meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#14161a" media="(prefers-color-scheme: dark)">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Everything">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <h1>Everything App</h1>
+      <div class="topbar-actions">
+        <button type="button" id="install" class="ghost" hidden>Install</button>
+        <details class="menu">
+          <summary class="ghost" aria-label="Data menu">Data</summary>
+          <div class="menu-body">
+            <button type="button" id="export">Export backup (.json)</button>
+            <button type="button" id="import">Import backup…</button>
+            <input type="file" id="import-file" accept="application/json,.json" hidden>
+          </div>
+        </details>
+      </div>
+    </header>
+
+    <nav class="tabs" role="tablist">
+      <button type="button" class="tab" role="tab" data-tab="home">Home</button>
+      <button type="button" class="tab" role="tab" data-tab="tasks">Tasks</button>
+      <button type="button" class="tab" role="tab" data-tab="notebook">Notebook</button>
+    </nav>
+
+    <main>
+      <!-- ---------------------------------------------------------- HOME -->
+      <section class="view" data-view="home">
+        <div class="stat-grid" id="home-stats"></div>
+        <div id="daily-tasks"></div>
+        <div class="home-grid">
+          <article class="panel">
+            <header class="panel-head">
+              <h2 class="sr-only">Tasks</h2>
+              <div class="panel-tabs" id="home-task-tabs" role="tablist" aria-label="Tasks"></div>
+              <button type="button" class="link-btn" data-goto="tasks">Go to Tasks</button>
+            </header>
+            <div id="home-tasks" class="panel-body"></div>
+          </article>
+          <article class="panel">
+            <header class="panel-head">
+              <h2>Latest notes</h2>
+              <button type="button" class="link-btn" data-goto="notebook">Go to Notebook</button>
+            </header>
+            <div id="home-notes" class="panel-body"></div>
+          </article>
+        </div>
+      </section>
+
+      <!-- --------------------------------------------------------- TASKS -->
+      <section class="view" data-view="tasks">
+        <form class="quick-add" id="task-add">
+          <div class="quick-add-row">
+            <input type="text" id="task-add-name" placeholder="Task name" autocomplete="off" enterkeyhint="done">
+            <label class="check"><input type="checkbox" id="task-add-today"> Add to Today</label>
+            <button type="submit" class="primary">Add</button>
+          </div>
+          <textarea id="task-add-notes" class="quick-add-notes" placeholder="Notes (optional) — Markdown, Tab to indent, ⌘/Ctrl+Enter to add"></textarea>
+          <div id="task-add-help"></div>
+        </form>
+        <div class="filters" id="task-filters"></div>
+        <div id="task-list"></div>
+      </section>
+
+      <!-- ------------------------------------------------------ NOTEBOOK -->
+      <section class="view" data-view="notebook">
+        <div class="toolbar">
+          <button type="button" class="primary" id="note-add">New note</button>
+          <span class="hint">Notes save automatically and render Markdown — tap a note to edit the raw text.</span>
+        </div>
+        <div class="note-grid" id="note-grid"></div>
+        <div id="note-help"></div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="editor">
+    <div class="dialog-inner">
+      <h2 id="editor-title">Edit</h2>
+      <form id="editor-form" method="dialog">
+        <div id="editor-fields"></div>
+        <footer class="dialog-actions">
+          <button type="button" class="ghost" id="editor-cancel">Cancel</button>
+          <button type="submit" class="primary">Save</button>
+        </footer>
+      </form>
+    </div>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="js/store.js"></script>
+  <script src="js/markdown.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

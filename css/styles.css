@@ -505,3 +505,6 @@ input[type="date"], input[type="time"] {
   input[type="date"], input[type="time"] { font-size: 16px; }
   .tabs .tab { font-size: 12px; padding: 11px 2px; }
 }
+
+.menu-note { padding: 8px 12px 2px; font-size: 12px; color: var(--text-dim); }
+.menu-divider { height: 1px; background: var(--border); margin: 4px 0; }

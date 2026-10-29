@@ -724,6 +724,27 @@ import { messaging } from './cloud.js';
     b.classList.remove('pulse'); void b.offsetWidth; b.classList.add('pulse');
   }
 
+  function renderPushMenu(st) {
+    var host = clear(document.getElementById('menu-push'));
+    function item(label, fn) {
+      var b = el('button', null, label);
+      b.type = 'button';
+      b.addEventListener('click', function () {
+        closeMenu();
+        Promise.resolve().then(fn).catch(fail);
+      });
+      host.appendChild(b);
+    }
+    if (st === 'on') {
+      host.appendChild(el('div', 'menu-note', '🔔 Notifications on for this device'));
+      item('Send a test notification', sendTest);
+      item('Turn off notifications here', disablePush);
+    } else if (st === 'off') {
+      item('🔔 Turn on notifications here', enablePush);
+    }
+    if (host.childNodes.length) host.appendChild(el('div', 'menu-divider'));
+  }
+
   function renderPushBanner() {
     var host = clear(document.getElementById('push-banner'));
     var st = pushState();
@@ -739,12 +760,10 @@ import { messaging } from './cloud.js';
       });
       actions.appendChild(b);
     }
-    if (st === 'on') {
-      text.appendChild(el('strong', null, '🔔 Notifications are on'));
-      text.appendChild(el('span', null, ' for this device.'));
-      button('Send a test', 'ghost', sendTest);
-      button('Turn off', 'link-btn', disablePush);
-    } else if (st === 'off') {
+    renderPushMenu(st);
+    // Once it's on there's nothing to say; the controls live in the account menu.
+    if (st === 'on') return;
+    if (st === 'off') {
       text.appendChild(el('strong', null, 'Turn on notifications'));
       text.appendChild(el('span', null, ' so reminders pop up on this device, even when the app is closed.'));
       button('Turn on', 'primary', enablePush);

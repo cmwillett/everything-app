@@ -18,7 +18,7 @@ const STATUSES = ['To Do', 'In Progress', 'Blocked', 'Done'];
 const COLORS = ['yellow', 'green', 'blue', 'pink', 'purple', 'grey'];
 
 const TABLES = {
-  tasks: { editable: ['name', 'notes', 'status', 'today', 'archived'], booleans: ['today', 'archived'] },
+  tasks: { editable: ['name', 'notes', 'status', 'today', 'archived', 'steps'], booleans: ['today', 'archived'], lists: ['steps'] },
   // kind: 'note' (rich text body) or 'list' (checklist items).
   notes: { editable: ['title', 'body', 'color', 'kind', 'items'], booleans: [], lists: ['items'] },
   links: { editable: ['title', 'url', 'category', 'notes'], booleans: [] },

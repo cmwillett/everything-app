@@ -738,3 +738,34 @@ input[type="date"], input[type="time"] {
    (e.g. at a large text size). */
 dialog { overflow-y: auto; overscroll-behavior: contain; }
 .help-dialog .dialog-inner, .admin-dialog .dialog-inner { max-height: none; overflow: visible; }
+
+/* task steps */
+.steps-editor { border: 1px solid var(--border); border-radius: 8px; background: var(--surface); padding: 6px 8px; }
+.steps-editor-head { font-size: 12px; color: var(--text-dim); padding: 2px 4px 4px; font-weight: 500; }
+.steps-editor-item, .steps-adder { display: flex; align-items: center; gap: 8px; padding: 1px 4px; border-radius: 6px; }
+.steps-editor-item input[type="checkbox"] { width: 17px; height: 17px; flex: none; accent-color: var(--accent); margin: 0; }
+.steps-editor .steps-text, .steps-editor .steps-add-input {
+  flex: 1; min-width: 0; width: auto; border: 0; background: transparent; padding: 7px 2px; border-radius: 4px;
+}
+.steps-editor .steps-text:focus, .steps-editor .steps-add-input:focus { outline: 0; background: var(--surface-2); }
+.steps-editor-item.is-done .steps-text { text-decoration: line-through; color: var(--text-dim); }
+.steps-editor-item:hover .list-del, .steps-editor-item:focus-within .list-del { opacity: 1; }
+.steps-convert { margin-top: 8px; font-size: 13px; }
+
+.task-steps { margin-top: 6px; }
+.steps-head { display: flex; align-items: center; gap: 10px; margin-bottom: 3px; }
+.steps-count { font-size: 12px; font-weight: 600; color: var(--text-dim); white-space: nowrap; }
+.steps-count.is-complete { color: var(--accent); }
+.steps-bar { flex: 1; max-width: 160px; height: 5px; border-radius: 3px; background: var(--border); overflow: hidden; }
+.steps-bar-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width .25s; }
+.steps-list { display: flex; flex-direction: column; }
+.step { display: flex; align-items: flex-start; gap: 9px; padding: 4px 0; cursor: pointer; font-size: 13.5px; }
+.step input[type="checkbox"] { width: 18px; height: 18px; flex: none; margin: 1px 0 0; accent-color: var(--accent); cursor: pointer; }
+.step-text { overflow-wrap: anywhere; }
+.step.is-done .step-text { text-decoration: line-through; color: var(--text-dim); }
+.steps-more { font-size: 12.5px; margin-top: 2px; }
+@media (max-width: 600px) {
+  .step { padding: 6px 0; font-size: 14.5px; }
+  .step input[type="checkbox"] { width: 20px; height: 20px; }
+  .steps-editor .steps-text, .steps-editor .steps-add-input { font-size: 16px; }
+}

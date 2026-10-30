@@ -99,8 +99,10 @@ import { messaging, adminStats } from './cloud.js';
   var pendingSave = null;
 
   var richFields = {};
+  var stepFields = {};
   function openEditor(title, fields, onSave) {
     richFields = {};
+    stepFields = {};
     document.getElementById('editor-title').textContent = title;
     var host = clear(document.getElementById('editor-fields'));
     fields.forEach(function (field) {
@@ -109,6 +111,15 @@ import { messaging, adminStats } from './cloud.js';
       label.setAttribute('for', 'f-' + field.name);
       wrap.appendChild(label);
       var input;
+      if (field.type === 'steps') {
+        wrap.removeChild(label);
+        var se = stepsEditor(field.value);
+        stepFields[field.name] = se;
+        wrap.appendChild(se.el);
+        if (field.after) field.after(wrap, se);
+        host.appendChild(wrap);
+        return;
+      }
       if (field.type === 'rich') {
         var rte = RichText.create({ value: field.value, placeholder: field.placeholder || '', minHeight: 140 });
         rte.editor.id = 'f-' + field.name;
@@ -142,6 +153,7 @@ import { messaging, adminStats } from './cloud.js';
     var values = {};
     dialogForm.querySelectorAll('[name]').forEach(function (i) { values[i.name] = i.value; });
     Object.keys(richFields).forEach(function (k) { values[k] = richFields[k].getValue(); });
+    Object.keys(stepFields).forEach(function (k) { values[k] = stepFields[k].getItems(); });
     var handler = pendingSave;
     pendingSave = null;
     dialog.close();
@@ -331,7 +343,8 @@ import { messaging, adminStats } from './cloud.js';
       var row = el('div', 'mini mini-task');
       var text = el('div', 'mini-text');
       text.appendChild(el('div', 'mini-title' + (task.status === 'Done' ? ' is-done' : ''), task.name || '(untitled)'));
-      text.appendChild(el('div', 'mini-sub', task.status));
+      var sp = stepsProgress(Array.isArray(task.steps) ? task.steps : []);
+      text.appendChild(el('div', 'mini-sub', task.status + (sp.total ? ' · ' + sp.done + ' of ' + sp.total + ' steps' : '')));
       row.appendChild(text);
       if (!task.archived) {
         var star = iconButton(task.today ? 'Move to ' + LABEL_LATER : 'Move to ' + LABEL_NOW,
@@ -457,6 +470,8 @@ import { messaging, adminStats } from './cloud.js';
     var main = el('div', 'row-main');
     main.appendChild(el('div', 'row-title' + (task.status === 'Done' ? ' is-done' : ''), task.name || '(untitled)'));
     if (task.notes) main.appendChild(mdInto(el('div', 'row-sub md'), task.notes));
+    var stepsBox = taskSteps(task);
+    if (stepsBox) main.appendChild(stepsBox);
 
     // Status sits under the title, leaving the right-hand side for the buttons.
     var select = el('select', 'status-select');
@@ -497,6 +512,221 @@ import { messaging, adminStats } from './cloud.js';
     return row;
   }
 
+  /* ----------------------------------------------------------- steps -- */
+  function stepId() { return crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random(); }
+  function splitLines(text) {
+    return String(text).split(/\r?\n/)
+      .map(function (l) { return l.replace(/^\s*(?:[-*•]|\[[ xX]?\]|\d+[.)])\s*/, '').trim(); })
+      .filter(Boolean);
+  }
+  function cleanSteps(items) {
+    return (items || []).filter(function (i) { return String(i.text || '').trim(); })
+      .map(function (i) { return { id: i.id || stepId(), text: String(i.text).trim(), done: !!i.done }; });
+  }
+
+  // An editable list of steps for the add form and the edit window.
+  function stepsEditor(initial) {
+    var items = (initial || []).map(function (i) { return { id: i.id, text: i.text, done: !!i.done }; });
+    var wrap = el('div', 'steps-editor');
+    var head = el('div', 'steps-editor-head', 'Steps (optional)');
+    var listHost = el('div', 'steps-editor-list');
+    var adder = el('div', 'steps-adder');
+    adder.appendChild(el('span', 'list-plus', '＋'));
+    var add = el('input', 'steps-add-input');
+    add.type = 'text';
+    add.placeholder = 'Add a step, press Enter';
+    add.setAttribute('enterkeyhint', 'next');
+    adder.appendChild(add);
+    wrap.appendChild(head);
+    wrap.appendChild(listHost);
+    wrap.appendChild(adder);
+
+    function addLines(text, at) {
+      var made = splitLines(text).map(function (t) { return { id: stepId(), text: t, done: false }; });
+      if (at == null) at = items.length;
+      items.splice.apply(items, [at, 0].concat(made));
+      return made;
+    }
+
+    function draw(focusId) {
+      clear(listHost);
+      items.forEach(function (item) {
+        var row = el('div', 'steps-editor-item' + (item.done ? ' is-done' : ''));
+        var box = document.createElement('input');
+        box.type = 'checkbox';
+        box.checked = item.done;
+        box.setAttribute('aria-label', 'Done');
+        box.addEventListener('change', function () { item.done = box.checked; row.classList.toggle('is-done', item.done); });
+        var text = el('input', 'steps-text');
+        text.type = 'text';
+        text.value = item.text;
+        text.dataset.step = item.id;
+        text.addEventListener('input', function () { item.text = text.value; });
+        text.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            var made = { id: stepId(), text: '', done: false };
+            items.splice(items.indexOf(item) + 1, 0, made);
+            draw(made.id);
+          } else if (e.key === 'Backspace' && !text.value) {
+            e.preventDefault();
+            var i = items.indexOf(item);
+            items.splice(i, 1);
+            var prev = items[i - 1];
+            draw(prev ? prev.id : null);
+            if (!prev) add.focus();
+          }
+        });
+        text.addEventListener('paste', function (e) {
+          var t = e.clipboardData && e.clipboardData.getData('text/plain');
+          if (!t || t.indexOf('\n') === -1) return;
+          e.preventDefault();
+          var i = items.indexOf(item);
+          var made = addLines(t, i + 1);
+          if (!item.text.trim()) items.splice(i, 1);
+          draw(made.length ? made[made.length - 1].id : null);
+        });
+        var del = iconButton('Remove step', '✕', function () {
+          items.splice(items.indexOf(item), 1);
+          draw();
+        });
+        del.classList.add('list-del');
+        row.appendChild(box);
+        row.appendChild(text);
+        row.appendChild(del);
+        listHost.appendChild(row);
+      });
+      if (focusId) {
+        var f = listHost.querySelector('[data-step="' + focusId + '"]');
+        if (f) { f.focus(); f.setSelectionRange(f.value.length, f.value.length); }
+      }
+    }
+
+    function takeAdder() {
+      if (!add.value.trim()) return false;
+      addLines(add.value);
+      add.value = '';
+      draw();
+      return true;
+    }
+    // Enter would otherwise submit the whole form.
+    add.addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter' || e.metaKey || e.ctrlKey) return;
+      e.preventDefault();
+      takeAdder();
+      add.focus();
+    });
+    add.addEventListener('paste', function (e) {
+      var t = e.clipboardData && e.clipboardData.getData('text/plain');
+      if (!t || t.indexOf('\n') === -1) return;
+      e.preventDefault();
+      addLines(t);
+      draw();
+      add.focus();
+    });
+
+    draw();
+    return {
+      el: wrap,
+      getItems: function () { takeAdder(); return cleanSteps(items); },
+      setItems: function (list) { items = (list || []).slice(); add.value = ''; draw(); },
+      addTexts: function (texts) { texts.forEach(function (t) { items.push({ id: stepId(), text: t, done: false }); }); draw(); }
+    };
+  }
+
+  // Steps shown on a task card, tickable right there.
+  var STEPS_SHOWN = 4;
+  var stepsExpanded = {};
+  function stepsProgress(steps) {
+    var done = steps.filter(function (s) { return s.done; }).length;
+    return { done: done, total: steps.length };
+  }
+  function progressBar(p) {
+    var bar = el('div', 'steps-bar');
+    var fill = el('div', 'steps-bar-fill');
+    fill.style.width = (p.total ? Math.round(p.done / p.total * 100) : 0) + '%';
+    bar.appendChild(fill);
+    return bar;
+  }
+
+  function taskSteps(task) {
+    var steps = Array.isArray(task.steps) ? task.steps : [];
+    var box = el('div', 'task-steps');
+    if (!steps.length) return null;
+
+    function render() {
+      clear(box);
+      var p = stepsProgress(steps);
+      var head = el('div', 'steps-head');
+      head.appendChild(el('span', 'steps-count' + (p.done === p.total ? ' is-complete' : ''),
+        (p.done === p.total ? '✓ ' : '') + p.done + ' of ' + p.total + ' steps'));
+      head.appendChild(progressBar(p));
+      box.appendChild(head);
+
+      var open = steps.filter(function (s) { return !s.done; });
+      var done = steps.filter(function (s) { return s.done; });
+      var ordered = open.concat(done);
+      var expanded = !!stepsExpanded[task.id];
+      var shown = expanded ? ordered : open.slice(0, STEPS_SHOWN);
+      var list = el('div', 'steps-list');
+      shown.forEach(function (step) {
+        var row = el('label', 'step' + (step.done ? ' is-done' : ''));
+        var cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = step.done;
+        cb.addEventListener('change', function () { toggleStep(task, steps, step, cb.checked, render); });
+        row.appendChild(cb);
+        row.appendChild(el('span', 'step-text', step.text));
+        list.appendChild(row);
+      });
+      box.appendChild(list);
+
+      var hidden = ordered.length - shown.length;
+      if (hidden > 0 || expanded) {
+        var more = el('button', 'link-btn steps-more', expanded ? 'Show less'
+          : (open.length > STEPS_SHOWN ? '+' + (open.length - STEPS_SHOWN) + ' more' : '') +
+            (open.length > STEPS_SHOWN && done.length ? ' · ' : '') +
+            (done.length ? 'show ' + done.length + ' done' : ''));
+        more.type = 'button';
+        more.addEventListener('click', function () {
+          if (expanded) delete stepsExpanded[task.id]; else stepsExpanded[task.id] = true;
+          render();
+        });
+        box.appendChild(more);
+      }
+    }
+    render();
+    return box;
+  }
+
+  function toggleStep(task, steps, step, checked, render) {
+    step.done = checked;
+    var payload = steps.map(function (s) { return { id: s.id, text: s.text, done: s.done }; });
+    // Let the tick show for a moment before the step moves down.
+    setTimeout(render, 220);
+    update('tasks', task.id, { steps: payload }, true).then(function () {
+      var p = stepsProgress(steps);
+      if (checked && p.done === p.total && task.status !== 'Done') {
+        setTimeout(function () {
+          if (window.confirm('All steps done for "' + (task.name || 'this task') + '". Mark the task Done?')) {
+            update('tasks', task.id, { status: 'Done' });
+          }
+        }, 300);
+      }
+    });
+  }
+
+  // Bullet points in the details → steps (used by the edit window).
+  function bulletsIn(html) {
+    var div = document.createElement('div');
+    div.innerHTML = RichText.toHtml(html);
+    return Array.prototype.map.call(div.querySelectorAll('li'), function (li) {
+      var copy = li.cloneNode(true);
+      copy.querySelectorAll('ul, ol').forEach(function (n) { n.remove(); });
+      return copy.textContent.trim();
+    }).filter(Boolean);
+  }
+
   function actionButton(label, glyph, word, onClick) {
     var b = el('button', 'act-btn');
     b.type = 'button';
@@ -514,6 +744,30 @@ import { messaging, adminStats } from './cloud.js';
     openEditor('Edit task', [
       { name: 'name', label: 'Task name', value: task.name },
       { name: 'notes', label: 'Details', type: 'rich', value: task.notes, placeholder: 'Add details…' },
+      { name: 'steps', type: 'steps', value: task.steps, after: function (wrap, se) {
+        // Offer to turn a bulleted list already written in the details into steps.
+        var btn = el('button', 'ghost steps-convert', '☑ Turn bullet points into steps');
+        btn.type = 'button';
+        function sync() { btn.hidden = !bulletsIn(richFields.notes ? richFields.notes.getValue() : '').length; }
+        btn.addEventListener('click', function () {
+          var rte = richFields.notes;
+          var texts = bulletsIn(rte.getValue());
+          if (!texts.length) return;
+          se.addTexts(texts);
+          // Take the list out of the details so it isn't there twice.
+          var div = document.createElement('div');
+          div.innerHTML = RichText.toHtml(rte.getValue());
+          div.querySelectorAll('ul, ol').forEach(function (n) { if (!n.parentElement.closest('ul, ol')) n.remove(); });
+          rte.setValue(div.innerHTML);
+          sync();
+          toast('Moved ' + texts.length + ' bullet' + (texts.length === 1 ? '' : 's') + ' into steps');
+        });
+        wrap.appendChild(btn);
+        setTimeout(function () {
+          sync();
+          if (richFields.notes) richFields.notes.editor.addEventListener('input', sync);
+        }, 0);
+      } },
       { name: 'status', label: 'Status', type: 'select', options: state.statuses, value: task.status }
     ], function (values) { update('tasks', id, values); });
   }
@@ -1495,6 +1749,8 @@ import { messaging, adminStats } from './cloud.js';
   var taskForm = document.getElementById('task-add');
   var taskNotes = RichText.create({ placeholder: 'Details (optional)', minHeight: 70, className: 'quick-add-rte' });
   document.getElementById('task-add-notes').appendChild(taskNotes.el);
+  var taskSteps_ = stepsEditor([]);
+  document.getElementById('task-add-steps').appendChild(taskSteps_.el);
   var taskToday = document.getElementById('task-add-today');
   taskToday.parentNode.lastChild.textContent = ' Add to ' + LABEL_NOW;
   submitOnCmdEnter(taskForm);
@@ -1503,9 +1759,10 @@ import { messaging, adminStats } from './cloud.js';
     var input = document.getElementById('task-add-name');
     var name = input.value.trim();
     if (!name) { input.focus(); return; }
-    create('tasks', { name: name, notes: taskNotes.getValue(), status: state.statuses[0], today: taskToday.checked });
+    create('tasks', { name: name, notes: taskNotes.getValue(), steps: taskSteps_.getItems(), status: state.statuses[0], today: taskToday.checked });
     input.value = '';
     taskNotes.setValue('');
+    taskSteps_.setItems([]);
     input.focus();
   });
 

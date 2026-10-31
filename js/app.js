@@ -1427,43 +1427,111 @@ import { messaging, adminStats } from './cloud.js';
 
   function n(v) { return v == null ? '?' : String(v); }
 
-  function statTile(icon, label, total, today, extra) {
-    var t = el('div', 'admin-stat');
+  // What you saw last time, so changed numbers can be highlighted. Kept on this
+  // device; "added today" numbers are only compared within the same day.
+  var ADMIN_LAST_KEY = 'everything-app:admin-last';
+  function loadAdminSnapshot() { try { return JSON.parse(localStorage.getItem(ADMIN_LAST_KEY)) || null; } catch (e) { return null; } }
+  function saveAdminSnapshot(snap) { try { localStorage.setItem(ADMIN_LAST_KEY, JSON.stringify(snap)); } catch (e) { /* ignore */ } }
+
+  function makeTracker(prev, todayStartsAt) {
+    var values = {};
+    var changed = 0;
+    var sameDay = !!prev && prev.todayStartsAt === todayStartsAt;
+    var before = (prev && prev.values) || {};
+    return {
+      values: values,
+      changedCount: function () { return changed; },
+      // Returns { value, delta } — delta is 0 when unchanged or not comparable.
+      track: function (key, value, isTodayCount) {
+        values[key] = value;
+        var old = before[key];
+        if (!prev || old == null || value == null || (isTodayCount && !sameDay)) return { value: value, delta: 0 };
+        var delta = Number(value) - Number(old);
+        if (delta) changed++;
+        return { value: value, delta: delta };
+      }
+    };
+  }
+
+  function deltaBadge(delta) {
+    return el('span', 'admin-delta ' + (delta > 0 ? 'is-up' : 'is-down'), (delta > 0 ? '▲ +' : '▼ ') + Math.abs(delta));
+  }
+
+  function numEl(cls, t) {
+    var span = el('span', cls + (t.delta ? ' is-changed' : ''), n(t.value));
+    return span;
+  }
+
+  // extras: [{ t: tracked, text: 'in Today' }] → "1 in Today · 2 done", changed parts coloured.
+  function extraLine(parts) {
+    var line = el('div', 'admin-stat-extra');
+    parts.forEach(function (p, i) {
+      if (i) line.appendChild(document.createTextNode(' · '));
+      if (p.plain) { line.appendChild(document.createTextNode(p.plain)); return; }
+      var span = el('span', p.t.delta ? 'is-changed' : null, n(p.t.value) + ' ' + p.text);
+      if (p.t.delta) span.title = (p.t.delta > 0 ? '+' : '') + p.t.delta + ' since last time';
+      line.appendChild(span);
+    });
+    return line;
+  }
+
+  function statTile(icon, label, total, today, extras) {
+    var t = el('div', 'admin-stat' + (total.delta || (today && today.delta) ? ' is-changed' : ''));
     var top = el('div', 'admin-stat-top');
-    top.appendChild(el('span', 'admin-stat-num', n(total)));
-    if (today) top.appendChild(el('span', 'admin-stat-today', '+' + today + ' today'));
+    top.appendChild(numEl('admin-stat-num', total));
+    if (total.delta) top.appendChild(deltaBadge(total.delta));
+    if (today && today.value) {
+      top.appendChild(el('span', 'admin-stat-today' + (today.delta ? ' is-changed' : ''), '+' + today.value + ' today'));
+    }
     t.appendChild(top);
     t.appendChild(el('div', 'admin-stat-label', icon + ' ' + label));
-    if (extra) t.appendChild(el('div', 'admin-stat-extra', extra));
+    if (extras && extras.length) t.appendChild(extraLine(extras));
     return t;
   }
 
   function renderAdmin(data) {
     var host = clear(document.getElementById('admin-body'));
     var users = data.users || [];
+    var prev = loadAdminSnapshot();
+    var tr = makeTracker(prev, data.todayStartsAt);
+    var knownUsers = (prev && prev.users) || null;
     var sum = function (f) { return users.reduce(function (a, u) { return a + (Number(f(u)) || 0); }, 0); };
 
+    var summary = el('div', 'admin-changes');
+    host.appendChild(summary);
+
     var totals = el('div', 'admin-totals');
-    [['Accounts', users.length],
-      ['Tasks', sum(function (u) { return u.tasks.total; })],
-      ['Notes & lists', sum(function (u) { return u.notes.total; })],
-      ['Reminders', sum(function (u) { return u.reminders.total; })],
-      ['Added today', sum(function (u) { return u.tasks.today + u.notes.today + u.reminders.today + u.links.today; })]
+    [['accounts', 'Accounts', users.length, false],
+      ['tasks', 'Tasks', sum(function (u) { return u.tasks.total; }), false],
+      ['notes', 'Notes & lists', sum(function (u) { return u.notes.total; }), false],
+      ['reminders', 'Reminders', sum(function (u) { return u.reminders.total; }), false],
+      ['today', 'Added today', sum(function (u) { return u.tasks.today + u.notes.today + u.reminders.today + u.links.today; }), true]
     ].forEach(function (p) {
-      var b = el('div', 'admin-total');
-      b.appendChild(el('div', 'admin-total-num', String(p[1])));
-      b.appendChild(el('div', 'admin-total-label', p[0]));
+      var t = tr.track('all.' + p[0], p[2], p[3]);
+      var b = el('div', 'admin-total' + (t.delta ? ' is-changed' : ''));
+      var top = el('div', 'admin-total-top');
+      top.appendChild(el('span', 'admin-total-num', String(t.value)));
+      if (t.delta) top.appendChild(deltaBadge(t.delta));
+      b.appendChild(top);
+      b.appendChild(el('div', 'admin-total-label', p[1]));
       totals.appendChild(b);
     });
     host.appendChild(totals);
 
+    var newPeople = 0;
     users.forEach(function (u) {
-      var card = el('div', 'admin-user');
+      var id = u.uid || u.email;
+      var k = function (f) { return 'u.' + id + '.' + f; };
+      var isNew = !!knownUsers && knownUsers.indexOf(id) === -1;
+      if (isNew) newPeople++;
+      var card = el('div', 'admin-user' + (isNew ? ' is-new' : ''));
       var head = el('div', 'admin-user-head');
       var avatar = el('span', 'admin-avatar', ((u.name || u.email || '?').trim()[0] || '?').toUpperCase());
       head.appendChild(avatar);
       var who = el('div', 'admin-who');
-      who.appendChild(el('div', 'admin-name', u.name || (u.email || '').split('@')[0] || '(no name)'));
+      var nameRow = el('div', 'admin-name', u.name || (u.email || '').split('@')[0] || '(no name)');
+      if (isNew) nameRow.appendChild(el('span', 'admin-new', 'New'));
+      who.appendChild(nameRow);
       who.appendChild(el('div', 'admin-email', u.email + (u.provider === 'google.com' ? ' · Google' : ' · email & password')));
       head.appendChild(who);
       var seen = el('div', 'admin-seen');
@@ -1473,19 +1541,50 @@ import { messaging, adminStats } from './cloud.js';
       card.appendChild(head);
 
       var grid = el('div', 'admin-stats');
-      grid.appendChild(statTile('✅', 'Tasks', u.tasks.total, u.tasks.today,
-        n(u.tasks.inToday) + ' in Today · ' + n(u.tasks.done) + ' done · ' + n(u.tasks.archived) + ' archived'));
-      grid.appendChild(statTile('📝', 'Notes & lists', u.notes.total, u.notes.today,
-        n(u.notes.lists) + ' list' + (u.notes.lists === 1 ? '' : 's')));
-      grid.appendChild(statTile('🔔', 'Reminders', u.reminders.total, u.reminders.today,
-        n(u.reminders.upcoming) + ' upcoming'));
-      grid.appendChild(statTile('🔗', 'Links', u.links.total, u.links.today, ''));
-      grid.appendChild(statTile('📱', 'Notified devices', u.devices, 0, u.devices ? 'getting reminders' : 'notifications off'));
+      grid.appendChild(statTile('✅', 'Tasks', tr.track(k('tasks'), u.tasks.total), tr.track(k('tasksToday'), u.tasks.today, true), [
+        { t: tr.track(k('inToday'), u.tasks.inToday), text: 'in Today' },
+        { t: tr.track(k('done'), u.tasks.done), text: 'done' },
+        { t: tr.track(k('archived'), u.tasks.archived), text: 'archived' }
+      ]));
+      var lists = tr.track(k('lists'), u.notes.lists);
+      grid.appendChild(statTile('📝', 'Notes & lists', tr.track(k('notes'), u.notes.total), tr.track(k('notesToday'), u.notes.today, true), [
+        { t: lists, text: 'list' + (u.notes.lists === 1 ? '' : 's') }
+      ]));
+      grid.appendChild(statTile('🔔', 'Reminders', tr.track(k('reminders'), u.reminders.total), tr.track(k('remindersToday'), u.reminders.today, true), [
+        { t: tr.track(k('upcoming'), u.reminders.upcoming), text: 'upcoming' }
+      ]));
+      grid.appendChild(statTile('🔗', 'Links', tr.track(k('links'), u.links.total), tr.track(k('linksToday'), u.links.today, true), []));
+      grid.appendChild(statTile('📱', 'Notified devices', tr.track(k('devices'), u.devices), null, [
+        { plain: u.devices ? 'getting reminders' : 'notifications off' }
+      ]));
       card.appendChild(grid);
       host.appendChild(card);
     });
+
+    // The headline above the totals.
+    var count = tr.changedCount();
+    if (!prev) {
+      summary.appendChild(el('span', null, 'First look on this device — changes will be highlighted from next time.'));
+    } else if (count || newPeople) {
+      summary.classList.add('has-changes');
+      var bits = [];
+      if (count) bits.push(count + ' number' + (count === 1 ? '' : 's') + ' changed');
+      if (newPeople) bits.push(newPeople + ' new account' + (newPeople === 1 ? '' : 's'));
+      summary.appendChild(el('strong', null, '✨ ' + bits.join(', ')));
+      summary.appendChild(el('span', null, ' since you last looked (' + fmtWhen(prev.at) + ')'));
+    } else {
+      summary.appendChild(el('span', null, 'No changes since you last looked (' + fmtWhen(prev.at) + ').'));
+    }
+
     host.appendChild(el('p', 'hint admin-foot', 'Updated ' + fmtWhen(data.generatedAt) +
-      '. "Today" means since midnight Eastern. Counts are what exists now — deleted items aren\u2019t counted.'));
+      '. Coloured numbers changed since you last looked. "Today" means since midnight Eastern. Counts are what exists now — deleted items aren’t counted.'));
+
+    saveAdminSnapshot({
+      at: data.generatedAt || new Date().toISOString(),
+      todayStartsAt: data.todayStartsAt || null,
+      values: tr.values,
+      users: users.map(function (u) { return u.uid || u.email; })
+    });
   }
 
   function loadAdmin() {

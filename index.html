@@ -111,11 +111,11 @@
 
       <!-- --------------------------------------------------------- TASKS -->
       <section class="view" data-view="tasks">
-        <form class="quick-add card-form" id="task-add">
-          <input type="text" id="task-add-name" placeholder="Task name" autocomplete="off" enterkeyhint="done">
-          <div id="task-add-notes"></div>
-          <div id="task-add-steps"></div>
-          <div class="form-actions">
+        <form class="quick-add card-form fold-form" id="task-add">
+          <input type="text" id="task-add-name" class="fold-primary" placeholder="Task name" data-folded-placeholder="＋  Add a task…" autocomplete="off" enterkeyhint="done">
+          <div id="task-add-notes" class="fold-extra"></div>
+          <div id="task-add-steps" class="fold-extra"></div>
+          <div class="form-actions fold-extra">
             <label class="check"><input type="checkbox" id="task-add-today"> Add to Today</label>
             <button type="submit" class="primary">Add task</button>
           </div>
@@ -127,10 +127,10 @@
       <!-- ----------------------------------------------------- REMINDERS -->
       <section class="view" data-view="reminders">
         <div id="push-banner"></div>
-        <form class="quick-add card-form rem-form" id="rem-add" novalidate>
-          <input type="text" id="rem-title" placeholder="Remind me to…" autocomplete="off" enterkeyhint="next">
-          <textarea id="rem-desc" class="quick-add-notes is-short" placeholder="Details (optional)"></textarea>
-          <div class="quick-add-row rem-when">
+        <form class="quick-add card-form rem-form fold-form" id="rem-add" novalidate>
+          <input type="text" id="rem-title" class="fold-primary" placeholder="Remind me to…" data-folded-placeholder="＋  Add a reminder…" autocomplete="off" enterkeyhint="next">
+          <textarea id="rem-desc" class="quick-add-notes is-short fold-extra" placeholder="Details (optional)"></textarea>
+          <div class="quick-add-row rem-when fold-extra">
             <label class="rem-field"><span>Date</span><input type="date" id="rem-date"></label>
             <label class="rem-field"><span>Time</span><input type="time" id="rem-time"></label>
             <button type="submit" class="primary">Add reminder</button>
@@ -141,15 +141,15 @@
 
       <!-- --------------------------------------------------------- LINKS -->
       <section class="view" data-view="links">
-        <form class="quick-add card-form" id="link-add" novalidate>
+        <form class="quick-add card-form fold-form" id="link-add" novalidate>
           <div class="quick-add-row">
-            <input type="text" id="link-add-title" placeholder="Label" autocomplete="off">
-            <input type="url" id="link-add-url" placeholder="URL" autocomplete="off" inputmode="url" autocapitalize="off">
-            <input type="text" id="link-add-category" placeholder="Category" autocomplete="off" list="link-categories">
+            <input type="text" id="link-add-title" class="fold-primary" placeholder="Label" data-folded-placeholder="＋  Add a link…" autocomplete="off">
+            <input type="url" id="link-add-url" class="fold-extra" placeholder="URL" autocomplete="off" inputmode="url" autocapitalize="off">
+            <input type="text" id="link-add-category" class="fold-extra" placeholder="Category" autocomplete="off" list="link-categories">
             <datalist id="link-categories"></datalist>
           </div>
-          <textarea id="link-add-notes" class="quick-add-notes is-short" placeholder="Description (optional)"></textarea>
-          <div class="form-actions">
+          <textarea id="link-add-notes" class="quick-add-notes is-short fold-extra" placeholder="Description (optional)"></textarea>
+          <div class="form-actions fold-extra">
             <button type="submit" class="primary">Add link</button>
           </div>
         </form>

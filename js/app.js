@@ -1949,6 +1949,51 @@ import { messaging, adminStats } from './cloud.js';
   window.addEventListener('online', updateNetBadge);
   window.addEventListener('offline', updateNetBadge);
 
+  /* ------------------------------------------------------ fold forms -- */
+  // The add forms show one line until you tap in; the rest opens then, and
+  // folds back away after adding (or when you leave without typing anything).
+  function formHasContent(form) {
+    var typed = Array.prototype.some.call(form.querySelectorAll('input[type="text"], input[type="url"], textarea'),
+      function (f) { return f.value.trim() !== ''; });
+    var rich = Array.prototype.some.call(form.querySelectorAll('[contenteditable="true"]'),
+      function (f) { return f.textContent.trim() !== ''; });
+    var steps = !!form.querySelector('.steps-editor-item');
+    return typed || rich || steps;
+  }
+  function setFolded(form, folded) {
+    form.classList.toggle('is-folded', folded);
+    var primary = form.querySelector('.fold-primary');
+    if (primary) {
+      if (!primary.dataset.openPlaceholder) primary.dataset.openPlaceholder = primary.placeholder;
+      primary.placeholder = folded ? primary.dataset.foldedPlaceholder : primary.dataset.openPlaceholder;
+    }
+  }
+  function foldForm(form) {
+    setFolded(form, true);
+    form.addEventListener('focusin', function () { setFolded(form, false); });
+    form.addEventListener('focusout', function () {
+      setTimeout(function () {
+        if (form.contains(document.activeElement) || formHasContent(form)) return;
+        setFolded(form, true);
+      }, 150);
+    });
+    form.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && !formHasContent(form)) {
+        setFolded(form, true);
+        if (document.activeElement) document.activeElement.blur();
+      }
+    });
+    // After adding: fold back up and put the keyboard away.
+    form.addEventListener('submit', function () {
+      setTimeout(function () {
+        if (formHasContent(form)) return;   // e.g. a missing URL — leave it open
+        if (form.contains(document.activeElement)) document.activeElement.blur();
+        setFolded(form, true);
+      }, 60);
+    });
+  }
+  document.querySelectorAll('.fold-form').forEach(foldForm);
+
   /* ------------------------------------------------------------- PWA -- */
   // Updates: look for a new version whenever the app comes back on screen, and
   // switch to it as soon as it's ready (but never in the middle of typing).

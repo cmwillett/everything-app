@@ -795,3 +795,13 @@ dialog { overflow-y: auto; overscroll-behavior: contain; }
 .fold-form.is-folded .fold-primary::placeholder { color: var(--accent); opacity: 1; }
 .fold-form .fold-extra { animation: fold-in .18s ease-out; }
 @keyframes fold-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+
+/* reminder delivery */
+.rem-receipt { font-size: 12px; margin-top: 3px; }
+.rem-receipt.is-ok { color: #15803d; }
+.rem-receipt.is-mail { color: var(--accent); }
+.rem-receipt.is-wait { color: var(--text-dim); }
+.rem-receipt.is-bad { color: var(--danger); font-weight: 600; }
+:root[data-dark] .rem-receipt.is-ok { color: #4ade80; }
+.rem-backup { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; color: var(--text-dim); margin: -4px 2px 14px; }
+.rem-backup .status-select { font-size: 13px; }

@@ -822,6 +822,7 @@ import { messaging, adminStats } from './cloud.js';
   var remOpenSent = false;
   function renderReminders() {
     renderPushBanner();
+    renderBackupSetting();
     var host = clear(document.getElementById('rem-list'));
     var upcoming = upcomingReminders();
     var sent = sentReminders();
@@ -869,12 +870,49 @@ import { messaging, adminStats } from './cloud.js';
     var when = el('div', 'rem-when-label', whenLabel(r.dueAtMs));
     if (overdue) when.appendChild(el('span', 'pill rem-late', 'Sending…'));
     main.appendChild(when);
+    if (sent) {
+      var receipt = deliveryReceipt(r);
+      if (receipt) main.appendChild(receipt);
+    }
     row.appendChild(main);
     var actions = el('div', 'row-actions');
     actions.appendChild(iconButton(sent ? 'Remind me again' : 'Edit', sent ? '↻' : '✎', function () { editReminder(r.id); }));
     actions.appendChild(iconButton('Delete', '✕', function () { remove('reminders', r.id, r.title); }, true));
     row.appendChild(actions);
     return row;
+  }
+
+  // How a sent reminder reached you.
+  function deliveryReceipt(r) {
+    var d = r.delivery;
+    var map = {
+      shown: ['ok', '✓ Shown on your phone'],
+      emailed: ['mail', '✉ Emailed to you' + (r.deliveryNote ? ' — ' + r.deliveryNote : '')],
+      pushed: ['wait', r.emailedAt ? '✓ Sent to your phone and emailed' : '… Sent to your phone, waiting for it to confirm'],
+      sending: ['wait', '… Sending'],
+      unconfirmed: ['bad', '⚠ Your phone didn\u2019t confirm, and the backup email failed' + (r.deliveryNote ? ' (' + r.deliveryNote + ')' : '')],
+      failed: ['bad', '⚠ Not delivered' + (r.deliveryNote ? ' — ' + r.deliveryNote : '')],
+      skipped: ['bad', 'Skipped — ' + (r.deliveryNote || 'too late')]
+    };
+    if (!d || !map[d]) return null;
+    return el('div', 'rem-receipt is-' + map[d][0], map[d][1]);
+  }
+
+  function renderBackupSetting() {
+    var host = clear(document.getElementById('rem-backup'));
+    var mode = Store.getSettings().reminderEmail || 'backup';
+    var row = el('label', 'rem-backup');
+    row.appendChild(el('span', null, '✉ Email backup:'));
+    var sel = el('select', 'status-select');
+    [['backup', 'Email me if my phone misses it'], ['always', 'Always email me too'], ['off', 'Never email']].forEach(function (o) {
+      var opt = el('option', null, o[1]); opt.value = o[0]; if (o[0] === mode) opt.selected = true; sel.appendChild(opt);
+    });
+    sel.addEventListener('change', function () {
+      Store.saveSettings({ reminderEmail: sel.value });
+      toast(sel.value === 'off' ? 'Reminders won\u2019t be emailed' : sel.value === 'always' ? 'Every reminder will be emailed too' : 'Reminders will be emailed if your phone misses them');
+    });
+    row.appendChild(sel);
+    host.appendChild(row);
   }
 
   function editReminder(id) {
@@ -970,6 +1008,11 @@ import { messaging, adminStats } from './cloud.js';
     renderPushBanner();
     toast('Notifications are off for this device');
   }
+
+  // Re-register every few hours while the app stays open, and whenever it
+  // comes back on screen, so a changed address is picked up quickly.
+  setInterval(function () { if (currentUid) refreshPush(); }, 3 * 3600e3);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden && currentUid) refreshPush(); });
 
   // Tokens can change; re-register quietly each time the app opens.
   async function refreshPush() {

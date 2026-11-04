@@ -111,7 +111,18 @@ self.addEventListener('push', (event) => {
     requireInteraction: true,
     data: { url: './#reminders' }
   };
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil((async () => {
+    await self.registration.showNotification(title, options);
+    // Tell the server it was shown, so it doesn't send the backup email.
+    if (d.ackUrl && d.ackKey && d.reminderId && d.uid) {
+      try {
+        await fetch(d.ackUrl, {
+          method: 'POST', mode: 'no-cors', keepalive: true,
+          body: JSON.stringify({ uid: d.uid, rid: d.reminderId, key: d.ackKey })
+        });
+      } catch (e) { /* offline — the email backup covers it */ }
+    }
+  })());
 });
 
 // Tapping the notification opens (or focuses) the app on the Reminders tab.

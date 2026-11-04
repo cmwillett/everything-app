@@ -75,6 +75,14 @@ Afterwards: commit and push as usual, open the app, go to **Reminders → Turn o
 
 **Changing the function later:** edit `functions/index.js`, then run `firebase deploy --only functions` again. Website changes still just need commit + push.
 
+### Backup emails for reminders (one-time)
+
+When a phone shows a reminder it confirms back to the server. If no phone confirms within 2 minutes (or none has notifications on), the reminder is emailed from the Gmail account set in `functions/index.js` (`MAIL_FROM`).
+
+1. Turn on 2-Step Verification for that Google account, then create an **app password** at <https://myaccount.google.com/apppasswords> (name it "Everything App").
+2. In the repo folder: `firebase functions:secrets:set MAIL_APP_PASSWORD` and paste the 16-letter password (spaces don't matter).
+3. `cd functions && npm install && cd ..` then `firebase deploy --only functions,firestore`.
+
 ## Run it locally
 
 Service workers need `http://`, not `file://`, so serve the folder:

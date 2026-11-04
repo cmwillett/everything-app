@@ -36,7 +36,11 @@ const CONFIRM_WITHIN_MS = 2 * 60e3; // no "shown" from a phone by then → email
 // as a Firebase secret: firebase functions:secrets:set MAIL_APP_PASSWORD
 const MAIL_FROM = 'craig.willett@gmail.com';
 const MAIL_APP_PASSWORD = defineSecret('MAIL_APP_PASSWORD');
-const PROJECT_ID = process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT || '';
+function projectId() {
+  if (process.env.GCLOUD_PROJECT) return process.env.GCLOUD_PROJECT;
+  try { return JSON.parse(process.env.FIREBASE_CONFIG || '{}').projectId || ''; } catch (e) { return ''; }
+}
+const PROJECT_ID = projectId() || 'everything-app-1d851';
 const ACK_URL = 'https://us-central1-' + PROJECT_ID + '.cloudfunctions.net/ackReminder';
 
 let mailer = null;
@@ -227,7 +231,7 @@ async function sendBackupEmails(now) {
 }
 
 // A phone calls this when it has shown a reminder notification.
-export const ackReminder = onRequest({ memory: '128MiB', timeoutSeconds: 10, maxInstances: 5, invoker: 'public', cors: true }, async (req, res) => {
+export const ackReminder = onRequest({ memory: '256MiB', timeoutSeconds: 10, maxInstances: 5, invoker: 'public', cors: true }, async (req, res) => {
   if (req.method !== 'POST') { res.status(405).send(''); return; }
   let b = req.body;
   if (typeof b === 'string' || Buffer.isBuffer(b)) { try { b = JSON.parse(String(b)); } catch (e) { b = {}; } }

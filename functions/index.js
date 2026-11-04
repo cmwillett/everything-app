@@ -232,12 +232,19 @@ async function sendBackupEmails(now) {
 
 // A phone calls this when it has shown a reminder notification.
 export const ackReminder = onRequest({ memory: '256MiB', timeoutSeconds: 10, maxInstances: 5, invoker: 'public', cors: true }, async (req, res) => {
-  if (req.method !== 'POST') { res.status(405).send(''); return; }
-  let b = req.body;
-  if (typeof b === 'string' || Buffer.isBuffer(b)) { try { b = JSON.parse(String(b)); } catch (e) { b = {}; } }
+  let b;
+  if (req.method === 'GET') b = req.query || {};
+  else if (req.method === 'POST') {
+    b = req.body;
+    if (typeof b === 'string' || Buffer.isBuffer(b)) { try { b = JSON.parse(String(b)); } catch (e) { b = {}; } }
+  } else { res.status(405).send(''); return; }
   b = b || {};
+  if (req.method === 'GET' && !b.key) { res.status(405).send(''); return; }   // a browser visit
   const uid = String(b.uid || ''), rid = String(b.rid || ''), key = String(b.key || '');
-  if (!/^[\w-]{1,128}$/.test(uid) || !/^[\w-]{1,128}$/.test(rid) || !/^[0-9a-f]{24}$/.test(key)) { res.status(400).send(''); return; }
+  if (!/^[\w-]{1,128}$/.test(uid) || !/^[\w-]{1,128}$/.test(rid) || !/^[0-9a-f]{24}$/.test(key)) {
+    logger.warn('Ack rejected: bad request', { method: req.method, uid: uid.slice(0, 40), rid: rid.slice(0, 60), keyLen: key.length });
+    res.status(400).send(''); return;
+  }
   const ref = db.collection('users').doc(uid).collection('reminders').doc(rid);
   try {
     await db.runTransaction(async (tx) => {
@@ -252,8 +259,10 @@ export const ackReminder = onRequest({ memory: '256MiB', timeoutSeconds: 10, max
         deliveryNote: d.delivery === 'emailed' ? 'your phone showed it late, after the email' : FieldValue.delete()
       });
     });
+    logger.info('Ack received', { method: req.method, user: uid, reminder: rid });
     res.status(204).send('');
   } catch (e) {
+    logger.warn('Ack rejected', { method: req.method, user: uid, reminder: rid, why: e.message });
     res.status(404).send('');
   }
 });

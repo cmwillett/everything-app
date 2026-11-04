@@ -1440,7 +1440,56 @@ import { messaging, adminStats } from './cloud.js';
   document.getElementById('app-version').textContent = APP_VERSION;
   document.getElementById('help-version').textContent = 'You\u2019re on version ' + APP_VERSION + '.';
   var helpDialog = document.getElementById('help');
-  document.getElementById('help-open').addEventListener('click', function () { helpDialog.showModal(); });
+  document.getElementById('help-open').addEventListener('click', function () { helpDialog.showModal(); showDiag(); });
+
+  // What the background part of the app (the part that shows notifications)
+  // is running, and what happened with the last reminder it showed.
+  function swVersion() {
+    return new Promise(function (resolve) {
+      var c = navigator.serviceWorker && navigator.serviceWorker.controller;
+      if (!c) { resolve(null); return; }
+      var ch = new MessageChannel();
+      var done = false;
+      ch.port1.onmessage = function (e) { done = true; resolve(e.data && e.data.version); };
+      c.postMessage({ type: 'version' }, [ch.port2]);
+      setTimeout(function () { if (!done) resolve(null); }, 1500);
+    });
+  }
+  function lastPushDiag() {
+    if (!window.caches) return Promise.resolve(null);
+    return caches.open('everything-app-diag').then(function (c) { return c.match('./__diag/last-push'); })
+      .then(function (r) { return r ? r.json() : null; }).catch(function () { return null; });
+  }
+  function showDiag() {
+    var host = document.getElementById('help-version');
+    Promise.all([swVersion(), lastPushDiag()]).then(function (res) {
+      var bg = res[0], d = res[1];
+      var parts = ['You\u2019re on version ' + APP_VERSION + '.'];
+      parts.push('Notifications part: ' + (bg ? bg + (bg === APP_VERSION ? ' ✓' : ' ⚠ out of date — close and reopen the app') : 'not running yet') + '.');
+      if (d) {
+        var ack = !d.hasAck ? 'no confirmation info' : d.ack && d.ack.ok ? 'confirmed ✓ (' + d.ack.how + ')' :
+          d.ack ? 'confirmation failed — ' + (d.ack.note || d.ack.status || 'unknown') : 'not confirmed';
+        parts.push('Last reminder on this device: ' + new Date(d.at).toLocaleString() + ' (' + (d.version || '?') + '), ' + (d.shown ? 'shown' : 'not shown') + ', ' + ack + '.');
+      }
+      host.textContent = parts.join(' ');
+    });
+  }
+
+  // If the phone couldn't confirm a reminder in the background, try again
+  // from the app the next time it's opened.
+  function retryPendingAck() {
+    lastPushDiag().then(function (d) {
+      if (!d || !d.pending) return;
+      var p = d.pending;
+      fetch(p.url, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ uid: p.uid, rid: p.rid, key: p.key }) })
+        .then(function (res) {
+          d.pending = null; d.ack = { ok: res.ok, how: 'app', status: res.status };
+          return caches.open('everything-app-diag').then(function (c) { return c.put('./__diag/last-push', new Response(JSON.stringify(d))); });
+        }).catch(function () { /* still offline */ });
+    });
+  }
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) retryPendingAck(); });
+  setTimeout(retryPendingAck, 3000);
   document.getElementById('help-close').addEventListener('click', function () { helpDialog.close(); });
   document.getElementById('help-done').addEventListener('click', function () { helpDialog.close(); });
   helpDialog.addEventListener('click', function (e) { if (e.target === helpDialog) helpDialog.close(); });

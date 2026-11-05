@@ -15,6 +15,7 @@ const ASSETS = [
   './js/appearance.js',
   './js/app.js',
   './js/store.js',
+  './js/recur.js',
   './js/cloud.js',
   './js/firebase-config.js',
   './js/push-config.js',

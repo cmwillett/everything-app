@@ -19,6 +19,7 @@ import { onCall, onRequest, HttpsError } from 'firebase-functions/v2/https';
 import { defineSecret } from 'firebase-functions/params';
 import nodemailer from 'nodemailer';
 import { randomBytes } from 'node:crypto';
+import { nextOccurrence, isRepeating } from './recur.js';
 import * as logger from 'firebase-functions/logger';
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
@@ -62,7 +63,8 @@ async function emailReminder(userRef, r, why) {
   const user = await getAuth().getUser(userRef.id).catch(() => null);
   const to = user && user.email;
   if (!to) return { ok: false, note: 'no email address on the account' };
-  const when = new Date(Number(r.dueAtMs) || Date.now()).toLocaleString('en-US', {
+  // lastDueAtMs: a repeating reminder's dueAtMs has already moved on to next time.
+  const when = new Date(Number(r.lastDueAtMs) || Number(r.dueAtMs) || Date.now()).toLocaleString('en-US', {
     timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
   });
   const title = String(r.title || 'Reminder').slice(0, 200);
@@ -83,6 +85,21 @@ async function emailReminder(userRef, r, why) {
     logger.error('Backup email failed', { message: e.message });
     return { ok: false, note: 'email failed: ' + e.message };
   }
+}
+
+function ruleOf(r) {
+  return { repeat: r.repeat, days: r.repeatDays, anchor: r.repeatAnchor, time: r.repeatTime, until: r.repeatUntil, tz: r.tz };
+}
+
+// A repeating reminder goes straight back to "upcoming" for its next time.
+// Missed occurrences (phone off, app down) are skipped, never piled up.
+async function scheduleNext(doc, r, now) {
+  const rule = ruleOf(r);
+  if (!isRepeating(rule)) return false;
+  const next = nextOccurrence(rule, Math.max(now, Number(r.dueAtMs) || 0));
+  if (!next) return false;   // reached its "until" date — it stays in Sent
+  await doc.ref.update({ status: 'pending', dueAtMs: next, nextAtMs: next, lastSentAt: new Date().toISOString() });
+  return true;
 }
 
 async function reminderEmailMode(userRef) {
@@ -125,7 +142,10 @@ export const sendDueReminders = onSchedule(
       try {
         await doc.ref.update(
           { nextAtMs: FieldValue.delete(), status: 'sent', sentAt: new Date().toISOString(),
-            delivery: 'sending', ackKey },
+            delivery: 'sending', ackKey, lastDueAtMs: Number(r.dueAtMs) || now,
+            // Fresh receipt for this occurrence (a repeating reminder reuses the record).
+            ackedAt: FieldValue.delete(), emailedAt: FieldValue.delete(), deliveryNote: FieldValue.delete(),
+            pushedTo: FieldValue.delete(), emailDueMs: FieldValue.delete() },
           { lastUpdateTime: doc.updateTime }
         );
       } catch (e) {
@@ -134,6 +154,7 @@ export const sendDueReminders = onSchedule(
 
       if (now - Number(r.dueAtMs || r.nextAtMs) > STALE_AFTER_MS) {
         await doc.ref.update({ delivery: 'skipped', deliveryNote: 'more than a day late' }).catch(() => {});
+        await scheduleNext(doc, r, now).catch((e) => logger.error('Could not schedule next', { message: e.message }));
         continue;
       }
 
@@ -199,7 +220,8 @@ export const sendDueReminders = onSchedule(
         update.deliveryNote = 'no phone has notifications on';
       }
       await doc.ref.update(update).catch(() => {});
-      logger.info('Reminder', { user: userRef.id, reminder: doc.id, devices: tokens.length, pushed: successCount, delivery: update.delivery });
+      const repeats = await scheduleNext(doc, r, now).catch((e) => { logger.error('Could not schedule next', { message: e.message }); return false; });
+      logger.info('Reminder', { user: userRef.id, reminder: doc.id, devices: tokens.length, pushed: successCount, delivery: update.delivery, repeats });
     }
     logger.info('Reminders processed', { due: due.size, notificationsSent: sent });
   }

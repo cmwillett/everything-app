@@ -1,5 +1,6 @@
 import { Store } from './store.js';
 import { messaging, adminStats } from './cloud.js';
+import { nextOccurrence, describe as describeRule, isRepeating } from './recur.js';
 
 (function () {
   'use strict';
@@ -11,6 +12,14 @@ import { messaging, adminStats } from './cloud.js';
   var HOME_ROWS = 6;
   var HOME_NOTES = 4;
   var DEFAULT_DAILY = ['Make today a GREAT day!', 'Complete today\'s tasks!'];
+  // Repeating reminders
+  var LOCAL_TZ = (Intl.DateTimeFormat().resolvedOptions().timeZone) || 'America/New_York';
+  var REPEAT_OPTIONS = [
+    ['none', 'Doesn’t repeat'], ['daily', 'Every day'], ['weekdays', 'Weekdays (Mon–Fri)'],
+    ['weekly', 'Every week'], ['biweekly', 'Every 2 weeks'], ['monthly', 'Every month'],
+    ['yearly', 'Every year'], ['days', 'Specific days…']
+  ];
+  var DAY_CHIPS = [[1, 'Mon'], [2, 'Tue'], [3, 'Wed'], [4, 'Thu'], [5, 'Fri'], [6, 'Sat'], [0, 'Sun']];
 
   var state = {
     tasks: [], notes: [], links: [], reminders: [],
@@ -111,6 +120,12 @@ import { messaging, adminStats } from './cloud.js';
       label.setAttribute('for', 'f-' + field.name);
       wrap.appendChild(label);
       var input;
+      if (field.type === 'custom') {
+        wrap.removeChild(label);
+        field.render(wrap);
+        host.appendChild(wrap);
+        return;
+      }
       if (field.type === 'steps') {
         wrap.removeChild(label);
         var se = stepsEditor(field.value);
@@ -809,6 +824,13 @@ import { messaging, adminStats } from './cloud.js';
   }
 
   // Sensible defaults: today, at the next whole hour.
+  var remRepeat = repeatPicker({}, function () {
+    return { date: document.getElementById('rem-date').value, time: document.getElementById('rem-time').value };
+  });
+  document.getElementById('rem-repeat').appendChild(remRepeat.el);
+  document.getElementById('rem-date').addEventListener('input', function () { remRepeat.refresh(); });
+  document.getElementById('rem-time').addEventListener('input', function () { remRepeat.refresh(); });
+
   function resetReminderForm() {
     var next = new Date();
     next.setMinutes(0, 0, 0);
@@ -817,6 +839,7 @@ import { messaging, adminStats } from './cloud.js';
     document.getElementById('rem-desc').value = '';
     document.getElementById('rem-date').value = dateInputValue(next);
     document.getElementById('rem-time').value = timeInputValue(next);
+    if (typeof remRepeat !== 'undefined') remRepeat.reset();
   }
 
   var remOpenSent = false;
@@ -863,23 +886,145 @@ import { messaging, adminStats } from './cloud.js';
     var overdue = !sent && r.dueAtMs < Date.now() - 90 * 1000;
     var row = el('div', 'row rem-row' + (sent ? ' is-sent' : ''));
     row.dataset.id = r.id;
-    row.appendChild(el('span', 'rem-icon', sent ? '✓' : '🔔'));
+    row.appendChild(el('span', 'rem-icon', sent ? '✓' : (isRepeating(ruleOf(r)) ? '🔁' : '🔔')));
     var main = el('div', 'row-main');
     main.appendChild(el('div', 'row-title', r.title || '(untitled)'));
     if (r.description) main.appendChild(el('div', 'row-sub', r.description));
-    var when = el('div', 'rem-when-label', whenLabel(r.dueAtMs));
+    var rule = ruleOf(r);
+    var repeating = isRepeating(rule);
+    var when = el('div', 'rem-when-label', (repeating && !sent ? 'Next: ' : '') + whenLabel(r.dueAtMs));
     if (overdue) when.appendChild(el('span', 'pill rem-late', 'Sending…'));
     main.appendChild(when);
-    if (sent) {
+    if (repeating) main.appendChild(el('div', 'rem-repeat-label', '🔁 ' + describeRule(rule) + (sent ? ' — finished' : '')));
+    // Sent ones show how they reached you; repeating ones show how the last one did.
+    if (sent || (repeating && r.lastSentAt)) {
       var receipt = deliveryReceipt(r);
-      if (receipt) main.appendChild(receipt);
+      if (receipt) {
+        if (repeating && !sent) receipt.textContent = 'Last time (' + whenLabel(Number(r.lastDueAtMs) || Date.parse(r.lastSentAt)) + '): ' + receipt.textContent;
+        main.appendChild(receipt);
+      }
     }
     row.appendChild(main);
     var actions = el('div', 'row-actions');
+    if (repeating && !sent) actions.appendChild(iconButton('Skip the next one', '⏭', function () { skipNext(r); }));
     actions.appendChild(iconButton(sent ? 'Remind me again' : 'Edit', sent ? '↻' : '✎', function () { editReminder(r.id); }));
     actions.appendChild(iconButton('Delete', '✕', function () { remove('reminders', r.id, r.title); }, true));
     row.appendChild(actions);
     return row;
+  }
+
+  /* ------------------------------------------------- repeating reminders -- */
+
+  function ruleOf(r) {
+    return { repeat: r.repeat, days: r.repeatDays, anchor: r.repeatAnchor, time: r.repeatTime, until: r.repeatUntil, tz: r.tz || LOCAL_TZ };
+  }
+
+  // Repeat picker: a dropdown, day chips (for "Specific days") and an "Until" date.
+  // getDateTime() supplies the date/time fields it sits next to.
+  function repeatPicker(initial, getDateTime) {
+    initial = initial || {};
+    var wrap = el('div', 'repeat-picker');
+    var row = el('div', 'repeat-row');
+    var label = el('label', 'rem-field repeat-field');
+    label.appendChild(el('span', null, 'Repeat'));
+    var sel = el('select', 'repeat-select');
+    REPEAT_OPTIONS.forEach(function (o) {
+      var opt = el('option', null, o[1]); opt.value = o[0];
+      if (o[0] === (initial.repeat || 'none')) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    label.appendChild(sel);
+    row.appendChild(label);
+    var untilLabel = el('label', 'rem-field repeat-until');
+    untilLabel.appendChild(el('span', null, 'Until (optional)'));
+    var until = el('input');
+    until.type = 'date';
+    until.value = initial.repeatUntil || '';
+    untilLabel.appendChild(until);
+    row.appendChild(untilLabel);
+    wrap.appendChild(row);
+
+    var chips = el('div', 'day-chips');
+    var chosen = String(initial.repeatDays || '').split(',').filter(function (x) { return x !== ''; }).map(Number);
+    DAY_CHIPS.forEach(function (dc) {
+      var b = el('button', 'day-chip' + (chosen.indexOf(dc[0]) !== -1 ? ' is-on' : ''), dc[1]);
+      b.type = 'button';
+      b.setAttribute('aria-pressed', chosen.indexOf(dc[0]) !== -1 ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        var i = chosen.indexOf(dc[0]);
+        if (i === -1) chosen.push(dc[0]); else chosen.splice(i, 1);
+        b.classList.toggle('is-on', i === -1);
+        b.setAttribute('aria-pressed', i === -1 ? 'true' : 'false');
+        summary();
+      });
+      chips.appendChild(b);
+    });
+    wrap.appendChild(chips);
+    var note = el('div', 'hint repeat-note');
+    wrap.appendChild(note);
+
+    function rule() {
+      var dt = getDateTime();
+      return { repeat: sel.value, days: chosen.join(','), anchor: dt.date, time: dt.time, until: until.value, tz: LOCAL_TZ };
+    }
+    function summary() {
+      var on = sel.value !== 'none';
+      chips.hidden = sel.value !== 'days';
+      untilLabel.hidden = !on;
+      if (!on) { note.textContent = ''; return; }
+      var r = rule();
+      var first = firstOccurrence(r);
+      note.textContent = isRepeating(r)
+        ? '🔁 ' + describeRule(r) + (first ? ' · first: ' + whenLabel(first).replace(' · ', ' at ') : ' · it has already ended')
+        : (sel.value === 'days' ? 'Tap the days it should repeat on.' : '');
+    }
+    sel.addEventListener('change', summary);
+    until.addEventListener('change', summary);
+    wrap.addEventListener('refresh', summary);
+    summary();
+
+    return {
+      el: wrap,
+      refresh: summary,
+      reset: function () { sel.value = 'none'; until.value = ''; chosen = []; chips.querySelectorAll('.day-chip').forEach(function (c) { c.classList.remove('is-on'); c.setAttribute('aria-pressed', 'false'); }); summary(); },
+      // Fields to save, or { error } when it can't be saved.
+      values: function () {
+        if (sel.value === 'none') return { repeat: 'none', repeatDays: '', repeatAnchor: '', repeatTime: '', repeatUntil: '', tz: LOCAL_TZ };
+        var r = rule();
+        if (sel.value === 'days' && !chosen.length) return { error: 'Pick at least one day to repeat on' };
+        if (r.until && r.until < r.anchor) return { error: 'The "until" date is before the first date' };
+        return { repeat: r.repeat, repeatDays: r.days, repeatAnchor: r.anchor, repeatTime: r.time, repeatUntil: r.until, tz: r.tz };
+      }
+    };
+  }
+
+  // The first time a rule fires at or after its chosen date and time — or, if
+  // that's already passed, the next one after now.
+  function firstOccurrence(rule) {
+    if (!isRepeating(rule)) return null;
+    var chosen = fromInputs(rule.anchor, rule.time);
+    return nextOccurrence(rule, Math.max(Date.now(), chosen - 60000));
+  }
+
+  // Work out dueAtMs for a new/edited reminder from its form values.
+  function scheduleFromForm(date, time, rep) {
+    if (rep.repeat === 'none') {
+      var ms = fromInputs(date, time);
+      if (!Number.isFinite(ms)) return { error: 'Pick a date and time' };
+      if (ms <= Date.now()) return { error: 'That time has already passed' };
+      return { dueAtMs: ms };
+    }
+    var first = firstOccurrence({ repeat: rep.repeat, days: rep.repeatDays, anchor: rep.repeatAnchor, time: rep.repeatTime, until: rep.repeatUntil, tz: rep.tz });
+    if (!first) return { error: 'That repeat has no times left — check the "until" date' };
+    return { dueAtMs: first };
+  }
+
+  function skipNext(r) {
+    var next = nextOccurrence(ruleOf(r), r.dueAtMs);
+    if (!next) { toast('That’s the last one — delete it instead if you don’t need it', true); return; }
+    update('reminders', r.id, { dueAtMs: next }).then(function () {
+      toast('Skipped — next one is ' + whenLabel(next).replace(' · ', ' at '));
+    });
   }
 
   // How a sent reminder reached you.
@@ -918,31 +1063,48 @@ import { messaging, adminStats } from './cloud.js';
   function editReminder(id) {
     var r = byId(state.reminders, id);
     if (!r) return;
+    var repeating = isRepeating(ruleOf(r));
     var due = new Date(r.status === 'sent' ? Math.max(r.dueAtMs, Date.now() + 3600000) : r.dueAtMs);
+    // A repeating reminder's date is its starting date (fixes the weekday / day of month).
+    var dateValue = repeating && r.status !== 'sent' ? r.repeatAnchor : dateInputValue(due);
+    var timeValue = repeating && r.status !== 'sent' ? r.repeatTime : timeInputValue(due);
+    var picker = null;
     openEditor(r.status === 'sent' ? 'Remind me again' : 'Edit reminder', [
       { name: 'title', label: 'Remind me to…', value: r.title },
       { name: 'description', label: 'Details (optional)', type: 'textarea', value: r.description },
-      { name: 'date', label: 'Date', type: 'date', value: dateInputValue(due) },
-      { name: 'time', label: 'Time', type: 'time', value: timeInputValue(due) }
+      { name: 'date', label: repeating ? 'Starting' : 'Date', type: 'date', value: dateValue },
+      { name: 'time', label: 'Time', type: 'time', value: timeValue },
+      { name: 'repeat', type: 'custom', render: function (wrap) {
+        picker = repeatPicker(r.status === 'sent' ? {} : r, function () {
+          return { date: document.getElementById('f-date').value, time: document.getElementById('f-time').value };
+        });
+        wrap.appendChild(picker.el);
+        setTimeout(function () {
+          ['f-date', 'f-time'].forEach(function (fid) { document.getElementById(fid).addEventListener('input', picker.refresh); });
+        }, 0);
+      } }
     ], function (v) {
-      var ms = fromInputs(v.date, v.time);
       if (!v.title.trim()) { toast('Give the reminder a title', true); return; }
-      if (!Number.isFinite(ms)) { toast('Pick a date and time', true); return; }
-      if (ms <= Date.now()) { toast('That time has already passed', true); return; }
-      update('reminders', id, { title: v.title.trim(), description: v.description.trim(), dueAtMs: ms });
+      var rep = picker.values();
+      if (rep.error) { toast(rep.error, true); return; }
+      var sched = scheduleFromForm(v.date, v.time, rep);
+      if (sched.error) { toast(sched.error, true); return; }
+      update('reminders', id, Object.assign({ title: v.title.trim(), description: v.description.trim(), dueAtMs: sched.dueAtMs }, rep));
     });
   }
 
   document.getElementById('rem-add').addEventListener('submit', function (e) {
     e.preventDefault();
     var title = document.getElementById('rem-title');
-    var ms = fromInputs(document.getElementById('rem-date').value, document.getElementById('rem-time').value);
     if (!title.value.trim()) { toast('What should I remind you about?', true); title.focus(); return; }
-    if (!Number.isFinite(ms)) { toast('Pick a date and time', true); return; }
-    if (ms <= Date.now()) { toast('That time has already passed', true); return; }
-    create('reminders', { title: title.value.trim(), description: document.getElementById('rem-desc').value.trim(), dueAtMs: ms })
+    var rep = remRepeat.values();
+    if (rep.error) { toast(rep.error, true); return; }
+    var sched = scheduleFromForm(document.getElementById('rem-date').value, document.getElementById('rem-time').value, rep);
+    if (sched.error) { toast(sched.error, true); return; }
+    var ms = sched.dueAtMs;
+    create('reminders', Object.assign({ title: title.value.trim(), description: document.getElementById('rem-desc').value.trim(), dueAtMs: ms }, rep))
       .then(function () {
-        toast('Reminder set for ' + whenLabel(ms).replace(' · ', ' at '));
+        toast((rep.repeat !== 'none' ? '🔁 Repeating — first one ' : 'Reminder set for ') + whenLabel(ms).replace(' · ', ' at '));
         if (pushState() === 'off') pulseBanner();
       });
     resetReminderForm();

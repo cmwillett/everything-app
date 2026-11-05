@@ -24,7 +24,9 @@ const TABLES = {
   links: { editable: ['title', 'url', 'category', 'notes'], booleans: [] },
   // status / sentAt are written by the reminder sender (functions/index.js);
   // they're carried through but never set from the edit form.
-  reminders: { editable: ['title', 'description', 'dueAtMs'], booleans: [], numbers: ['dueAtMs'], passthrough: ['status', 'sentAt', 'delivery', 'deliveryNote', 'pushedTo', 'emailedAt', 'ackedAt'] }
+  reminders: { editable: ['title', 'description', 'dueAtMs', 'repeat', 'repeatDays', 'repeatAnchor', 'repeatTime', 'repeatUntil', 'tz'],
+    booleans: [], numbers: ['dueAtMs'],
+    passthrough: ['status', 'sentAt', 'delivery', 'deliveryNote', 'pushedTo', 'emailedAt', 'ackedAt', 'lastSentAt', 'lastDueAtMs'] }
 };
 const TABLE_NAMES = Object.keys(TABLES);
 
@@ -254,6 +256,7 @@ export const Store = {
       clean.status = 'pending';
       write.status = 'pending';
       write.nextAtMs = clean.dueAtMs;
+      // (lastSentAt / lastDueAtMs stay: they describe the previous time it went off.)
       ['sentAt', 'delivery', 'deliveryNote', 'pushedTo', 'emailedAt', 'ackedAt', 'ackKey', 'emailDueMs'].forEach(function (f) {
         write[f] = fb.f.deleteField();
         delete item[f];

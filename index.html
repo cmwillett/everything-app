@@ -58,13 +58,14 @@
         <button type="button" id="help-open" class="help-btn" aria-label="Help" title="How this app works">?</button>
         <span id="net" class="net-badge" hidden title="Changes are saved on this device and will sync when you're back online">Offline</span>
         <details class="menu">
-          <summary class="avatar" aria-label="Account menu"><span id="account-initial">?</span></summary>
+          <summary class="avatar" aria-label="Account menu"><span id="account-initial">?</span><span class="avatar-dot" id="avatar-dot" hidden></span></summary>
           <div class="menu-body">
             <div class="menu-user">
               <strong id="account-name"></strong>
               <span id="account-email"></span>
             </div>
             <div id="menu-push"></div>
+            <button type="button" id="people-open">👥 People &amp; sharing<span class="menu-badge" id="people-badge" hidden></span></button>
             <button type="button" id="admin-open" hidden>📊 Admin dashboard</button>
             <button type="button" id="appearance-open">🎨 Appearance…</button>
             <button type="button" id="check-update">⟳ Check for updates</button>
@@ -88,6 +89,7 @@
     <main>
       <!-- ---------------------------------------------------------- HOME -->
       <section class="view" data-view="home">
+        <div id="invite-cards"></div>
         <div class="stat-grid" id="home-stats"></div>
         <div id="daily-tasks"></div>
         <div class="home-grid">
@@ -227,6 +229,17 @@
       </details>
 
       <details class="help-item">
+        <summary>👥 Sharing</summary>
+        <p>First connect: round account menu → <strong>People &amp; sharing</strong> → type their email → <em>Invite</em>. When they open the app they'll see your invite and tap <em>Accept</em>.</p>
+        <p>Then tap <strong>👥 Share</strong> on any task, reminder, note or list and tick who to share it with. It appears in their app too, marked 👥, and either of you can edit it, tick steps or list items, or mark it done — changes show up for both right away.</p>
+        <ul>
+          <li>Shared reminders go off on everyone's phone, each with their own backup email.</li>
+          <li>Only the person who made it can delete it or stop sharing it. Anyone else can <em>Leave</em> it, which just removes it from their own list.</li>
+          <li>Nothing else of yours is ever visible to them.</li>
+        </ul>
+      </details>
+
+      <details class="help-item">
         <summary>🎨 Make it yours</summary>
         <p>Tap the round button with your initial (top right) → <strong>Appearance</strong>. Pick a theme (Blush, Lavender, Peach…), light or dark, an accent colour, a background (hearts!), a rounded font, and a bigger <strong>text size</strong> if things are hard to read. It's saved to your account, so it follows you to your other devices and doesn't change anyone else's.</p>
       </details>
@@ -250,6 +263,30 @@
       <footer class="dialog-actions">
         <button type="button" class="primary" id="help-done">Got it</button>
       </footer>
+    </div>
+  </dialog>
+
+  <dialog id="people" class="people-dialog">
+    <div class="dialog-inner">
+      <div class="help-head">
+        <h2>👥 People &amp; sharing</h2>
+        <button type="button" class="icon-btn" id="people-close" aria-label="Close">✕</button>
+      </div>
+      <p class="hint">Connect with someone to share tasks, reminders, notes and lists with them. You only ever see what's shared — everything else stays private.</p>
+      <div id="people-body"></div>
+      <form id="invite-form" class="invite-form" novalidate>
+        <input type="email" id="invite-email" placeholder="Their email address" autocomplete="off" autocapitalize="off" inputmode="email">
+        <button type="submit" class="primary">Invite</button>
+      </form>
+      <p class="hint">They'll see your invite when they open the app signed in with that email.</p>
+    </div>
+  </dialog>
+
+  <dialog id="share" class="share-dialog">
+    <div class="dialog-inner">
+      <h2 id="share-title">Share</h2>
+      <div id="share-body"></div>
+      <footer class="dialog-actions" id="share-actions"></footer>
     </div>
   </dialog>
 

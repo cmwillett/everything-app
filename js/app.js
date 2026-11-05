@@ -318,6 +318,7 @@ import { nextOccurrence, describe as describeRule, isRepeating } from './recur.j
   }
 
   function renderHome() {
+    renderInvites();
     renderDailyTasks();
     var live = state.tasks.filter(function (t) { return !t.archived; });
     var nowTasks = live.filter(function (t) { return t.today; });
@@ -484,6 +485,8 @@ import { nextOccurrence, describe as describeRule, isRepeating } from './recur.j
 
     var main = el('div', 'row-main');
     main.appendChild(el('div', 'row-title' + (task.status === 'Done' ? ' is-done' : ''), task.name || '(untitled)'));
+    var tb = shareBadge(task);
+    if (tb) main.appendChild(tb);
     if (task.notes) main.appendChild(mdInto(el('div', 'row-sub md'), task.notes));
     var stepsBox = taskSteps(task);
     if (stepsBox) main.appendChild(stepsBox);
@@ -518,7 +521,11 @@ import { nextOccurrence, describe as describeRule, isRepeating } from './recur.j
         update('tasks', task.id, task.archived ? { archived: false } : { archived: true, today: false });
       }));
     actions.appendChild(actionButton('Edit', '✎', 'Edit', function () { editTask(task.id); }));
-    var del = actionButton('Delete', '✕', 'Delete', function () { remove('tasks', task.id, task.name); });
+    var shareBtn = actionButton('Share', '👥', task.shared ? 'Shared' : 'Share', function () { openShare('tasks', task.id); });
+    if (task.shared) shareBtn.classList.add('is-on');
+    actions.appendChild(shareBtn);
+    var mine = isMine(task);
+    var del = actionButton(mine ? 'Delete' : 'Leave', '✕', mine ? 'Delete' : 'Leave', function () { removeOrLeave('tasks', task, task.name); });
     del.classList.add('danger');
     actions.appendChild(del);
     row.appendChild(actions);
@@ -889,6 +896,8 @@ import { nextOccurrence, describe as describeRule, isRepeating } from './recur.j
     row.appendChild(el('span', 'rem-icon', sent ? '✓' : (isRepeating(ruleOf(r)) ? '🔁' : '🔔')));
     var main = el('div', 'row-main');
     main.appendChild(el('div', 'row-title', r.title || '(untitled)'));
+    var rb = shareBadge(r);
+    if (rb) main.appendChild(rb);
     if (r.description) main.appendChild(el('div', 'row-sub', r.description));
     var rule = ruleOf(r);
     var repeating = isRepeating(rule);
@@ -908,7 +917,10 @@ import { nextOccurrence, describe as describeRule, isRepeating } from './recur.j
     var actions = el('div', 'row-actions');
     if (repeating && !sent) actions.appendChild(iconButton('Skip the next one', '⏭', function () { skipNext(r); }));
     actions.appendChild(iconButton(sent ? 'Remind me again' : 'Edit', sent ? '↻' : '✎', function () { editReminder(r.id); }));
-    actions.appendChild(iconButton('Delete', '✕', function () { remove('reminders', r.id, r.title); }, true));
+    var rs = iconButton(r.shared ? 'Shared — change who' : 'Share', '👥', function () { openShare('reminders', r.id); });
+    if (r.shared) rs.classList.add('is-today');
+    actions.appendChild(rs);
+    actions.appendChild(iconButton(isMine(r) ? 'Delete' : 'Remove from my list', '✕', function () { removeOrLeave('reminders', r, r.title); }, true));
     row.appendChild(actions);
     return row;
   }
@@ -1027,8 +1039,193 @@ import { nextOccurrence, describe as describeRule, isRepeating } from './recur.j
     });
   }
 
+  /* --------------------------------------------------------- sharing -- */
+  var peopleDialog = document.getElementById('people');
+  var shareDialog = document.getElementById('share');
+
+  function personName(item, uid) {
+    if (uid === Store.myUid()) return 'You';
+    var c = Store.connections().filter(function (p) { return p.uid === uid; })[0];
+    if (c) return c.name;
+    var info = item && item.memberInfo && item.memberInfo[uid];
+    return (info && (info.name || info.email)) || 'Someone';
+  }
+  function isMine(item) { return !item.shared || item.owner === Store.myUid(); }
+
+  // "👥 Shared with Kristen" / "👥 From Craig · with you and Cody"
+  function shareBadge(item) {
+    if (!item.shared) return null;
+    var others = (item.members || []).filter(function (u) { return u !== Store.myUid(); });
+    var text;
+    if (item.owner === Store.myUid()) text = 'Shared with ' + others.map(function (u) { return personName(item, u); }).join(', ');
+    else {
+      var rest = others.filter(function (u) { return u !== item.owner; }).map(function (u) { return personName(item, u); });
+      text = 'From ' + personName(item, item.owner) + (rest.length ? ' · also ' + rest.join(', ') : '');
+    }
+    return el('span', 'share-badge', '👥 ' + text);
+  }
+
+  // Delete for your own things; "Leave" for things others shared with you.
+  function removeOrLeave(table, item, label) {
+    if (isMine(item)) { remove(table, item.id, label); return; }
+    if (!window.confirm('Remove "' + (label || 'this') + '" from your list?\n\nIt stays with ' + personName(item, item.owner) + '.')) return;
+    run('leave', table, item.id).then(function () { load(); toast('Removed from your list'); }).catch(fail);
+  }
+
+  function openShare(table, id) {
+    var item = byId(state[table], id);
+    if (!item) return;
+    var noun = { tasks: 'task', reminders: 'reminder', notes: item.kind === 'list' ? 'list' : 'note' }[table];
+    document.getElementById('share-title').textContent = '👥 Share this ' + noun;
+    var body = clear(document.getElementById('share-body'));
+    var actions = clear(document.getElementById('share-actions'));
+    function btn(label, cls, fn) { var b = el('button', cls, label); b.type = 'button'; b.addEventListener('click', fn); actions.appendChild(b); return b; }
+
+    if (!isMine(item)) {
+      body.appendChild(el('p', null, personName(item, item.owner) + ' shared this with you. You can edit it, tick things off and complete it; only ' + personName(item, item.owner) + ' can delete it or change who it’s shared with.'));
+      var others = (item.members || []).filter(function (u) { return u !== Store.myUid() && u !== item.owner; });
+      if (others.length) body.appendChild(el('p', 'hint', 'Also shared with ' + others.map(function (u) { return personName(item, u); }).join(', ') + '.'));
+      btn('Leave', 'ghost danger', function () { shareDialog.close(); removeOrLeave(table, item, item.title || item.name); });
+      btn('Done', 'primary', function () { shareDialog.close(); });
+      shareDialog.showModal();
+      return;
+    }
+
+    var people = Store.connections();
+    if (!people.length) {
+      body.appendChild(el('p', null, 'You haven’t connected with anyone yet. Invite someone first — once they accept, you can share with them.'));
+      btn('Cancel', 'ghost', function () { shareDialog.close(); });
+      btn('Invite someone…', 'primary', function () { shareDialog.close(); openPeople(); });
+      shareDialog.showModal();
+      return;
+    }
+    var chosen = (item.members || []).filter(function (u) { return u !== Store.myUid(); });
+    var list = el('div', 'share-list');
+    people.forEach(function (p) {
+      var row = el('label', 'share-person');
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = chosen.indexOf(p.uid) !== -1;
+      cb.addEventListener('change', function () {
+        if (cb.checked) chosen.push(p.uid); else chosen = chosen.filter(function (u) { return u !== p.uid; });
+      });
+      row.appendChild(cb);
+      var who = el('span', 'share-who');
+      who.appendChild(el('strong', null, p.name));
+      who.appendChild(el('span', 'hint', p.email));
+      row.appendChild(who);
+      list.appendChild(row);
+    });
+    body.appendChild(list);
+    if (table === 'reminders') body.appendChild(el('p', 'hint', 'Everyone it’s shared with gets the reminder on their own phone.'));
+    btn('Cancel', 'ghost', function () { shareDialog.close(); });
+    btn('Save', 'primary', function () {
+      var was = item.shared;
+      shareDialog.close();
+      run('setSharing', table, item.id, chosen).then(function () {
+        load();
+        toast(chosen.length ? 'Shared with ' + chosen.map(function (u) { return personName(item, u); }).join(', ') : (was ? 'No longer shared' : 'Not shared'));
+      }).catch(fail);
+    });
+    shareDialog.showModal();
+  }
+  shareDialog.addEventListener('click', function (e) { if (e.target === shareDialog) shareDialog.close(); });
+
+  function renderPeople() {
+    var host = clear(document.getElementById('people-body'));
+    var incoming = Store.invitesIn();
+    var outgoing = Store.invitesOut();
+    var people = Store.connections();
+    function section(title) { host.appendChild(el('h3', 'group-head', title)); var l = el('div', 'people-list'); host.appendChild(l); return l; }
+    function person(listEl, name, email, buttons) {
+      var row = el('div', 'people-row');
+      row.appendChild(el('span', 'admin-avatar', (name || email || '?').trim()[0].toUpperCase()));
+      var who = el('div', 'share-who');
+      who.appendChild(el('strong', null, name || email));
+      if (name && email) who.appendChild(el('span', 'hint', email));
+      row.appendChild(who);
+      var acts = el('div', 'people-actions');
+      buttons.forEach(function (b) {
+        var x = el('button', b[1], b[0]); x.type = 'button';
+        x.addEventListener('click', function () { x.disabled = true; Promise.resolve().then(b[2]).catch(fail).finally(function () { x.disabled = false; }); });
+        acts.appendChild(x);
+      });
+      row.appendChild(acts);
+      listEl.appendChild(row);
+    }
+    if (incoming.length) {
+      var inList = section('Wants to connect with you');
+      incoming.forEach(function (i) {
+        person(inList, i.fromName, i.fromEmail, [
+          ['Decline', 'ghost', function () { return Store.respond(i.id, false); }],
+          ['Accept', 'primary', function () { return Store.respond(i.id, true).then(function () { toast('Connected with ' + (i.fromName || i.fromEmail)); }); }]
+        ]);
+      });
+    }
+    var conn = section('Connected');
+    if (!people.length) conn.appendChild(el('p', 'empty', 'Nobody yet — invite someone below.'));
+    people.forEach(function (p) {
+      person(conn, p.name, p.email, [['Disconnect', 'link-btn danger-text', function () {
+        if (!window.confirm('Disconnect from ' + p.name + '?\n\nThings already shared stay shared until the owner stops sharing them. You won’t be able to share anything new with each other.')) return;
+        return Store.removeInvite(p.inviteId);
+      }]]);
+    });
+    if (outgoing.length) {
+      var outList = section('Invited — waiting for them');
+      outgoing.forEach(function (i) {
+        person(outList, '', i.toEmail, [['Cancel', 'link-btn', function () { return Store.removeInvite(i.id); }]]);
+      });
+    }
+  }
+
+  function openPeople() { closeMenu(); renderPeople(); peopleDialog.showModal(); }
+  document.getElementById('people-open').addEventListener('click', openPeople);
+  document.getElementById('people-close').addEventListener('click', function () { peopleDialog.close(); });
+  peopleDialog.addEventListener('click', function (e) { if (e.target === peopleDialog) peopleDialog.close(); });
+  document.getElementById('invite-form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var input = document.getElementById('invite-email');
+    var email = input.value.trim();
+    if (!email) { input.focus(); return; }
+    Promise.resolve().then(function () { return Store.invite(email); }).then(function () {
+      input.value = '';
+      toast('Invite sent to ' + email.toLowerCase());
+    }).catch(fail);
+  });
+
+  // Invites waiting for you: a card on Home and a dot on your avatar.
+  function renderInvites() {
+    var incoming = Store.invitesIn();
+    document.getElementById('avatar-dot').hidden = !incoming.length;
+    var badge = document.getElementById('people-badge');
+    badge.hidden = !incoming.length;
+    badge.textContent = incoming.length ? String(incoming.length) : '';
+    var host = clear(document.getElementById('invite-cards'));
+    incoming.forEach(function (i) {
+      var card = el('div', 'invite-card');
+      var text = el('div', 'invite-text');
+      text.appendChild(el('strong', null, '👥 ' + (i.fromName || i.fromEmail)));
+      text.appendChild(el('span', null, ' wants to connect so you can share tasks, reminders and lists.'));
+      card.appendChild(text);
+      var acts = el('div', 'people-actions');
+      [['Not now', 'ghost', false], ['Accept', 'primary', true]].forEach(function (b) {
+        var x = el('button', b[1], b[0]); x.type = 'button';
+        x.addEventListener('click', function () {
+          x.disabled = true;
+          Store.respond(i.id, b[2]).then(function () { if (b[2]) toast('Connected with ' + (i.fromName || i.fromEmail)); }).catch(fail);
+        });
+        acts.appendChild(x);
+      });
+      card.appendChild(acts);
+      host.appendChild(card);
+    });
+    if (peopleDialog.open) renderPeople();
+  }
+
   // How a sent reminder reached you.
   function deliveryReceipt(r) {
+    var mine = r.deliveries && r.deliveries[Store.myUid()];
+    if (mine) r = Object.assign({}, r, { delivery: mine.state, deliveryNote: mine.note, emailedAt: mine.emailed ? 'yes' : '' });
     var d = r.delivery;
     var map = {
       shown: ['ok', '✓ Shown on your phone'],
@@ -1040,7 +1237,17 @@ import { nextOccurrence, describe as describeRule, isRepeating } from './recur.j
       skipped: ['bad', 'Skipped — ' + (r.deliveryNote || 'too late')]
     };
     if (!d || !map[d]) return null;
-    return el('div', 'rem-receipt is-' + map[d][0], map[d][1]);
+    var line = el('div', 'rem-receipt is-' + map[d][0], map[d][1]);
+    // On a shared reminder, a short word on how it reached the others.
+    if (r.shared && r.deliveries) {
+      var others = Object.keys(r.deliveries).filter(function (u) { return u !== Store.myUid(); }).map(function (u) {
+        var st = r.deliveries[u].state;
+        var word = { shown: '✓', emailed: '✉', pushed: '…', sending: '…', failed: '⚠', unconfirmed: '⚠', skipped: '–' }[st] || '?';
+        return personName(r, u) + ' ' + word;
+      });
+      if (others.length) line.appendChild(el('span', 'rem-receipt-others', ' · ' + others.join(' · ')));
+    }
+    return line;
   }
 
   function renderBackupSetting() {
@@ -1392,7 +1599,10 @@ import { nextOccurrence, describe as describeRule, isRepeating } from './recur.j
       swatches.appendChild(sw);
     });
     bar.appendChild(swatches);
-    bar.appendChild(iconButton('Delete', '✕', function () { remove('notes', note.id, note.title); }, true));
+    var ns = iconButton(note.shared ? 'Shared — change who' : 'Share', '👥', function () { openShare('notes', note.id); });
+    if (note.shared) ns.classList.add('is-today');
+    bar.appendChild(ns);
+    bar.appendChild(iconButton(isMine(note) ? 'Delete' : 'Remove from my list', '✕', function () { removeOrLeave('notes', note, note.title); }, true));
     card.appendChild(bar);
 
     var title = el('input', 'note-title');
@@ -1401,6 +1611,8 @@ import { nextOccurrence, describe as describeRule, isRepeating } from './recur.j
     title.value = note.title || '';
     title.addEventListener('input', function () { queueSave(note.id, 'notes', { title: title.value }); });
     card.appendChild(title);
+    var nb = shareBadge(note);
+    if (nb) { nb.classList.add('note-share'); card.appendChild(nb); }
 
     if (note.kind === 'list') {
       card.classList.add('is-list');
@@ -1643,7 +1855,7 @@ import { nextOccurrence, describe as describeRule, isRepeating } from './recur.j
     lastPushDiag().then(function (d) {
       if (!d || !d.pending) return;
       var p = d.pending;
-      fetch(p.url, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ uid: p.uid, rid: p.rid, key: p.key }) })
+      fetch(p.url, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ uid: p.uid, rid: p.rid, key: p.key, s: p.s || '' }) })
         .then(function (res) {
           d.pending = null; d.ack = { ok: res.ok, how: 'app', status: res.status };
           return caches.open('everything-app-diag').then(function (c) { return c.put('./__diag/last-push', new Response(JSON.stringify(d))); });
@@ -2442,6 +2654,8 @@ import { nextOccurrence, describe as describeRule, isRepeating } from './recur.j
           state.tasks = []; state.notes = []; state.links = []; state.reminders = [];
           if (appearanceDialog.open) appearanceDialog.close();
           if (adminDialog.open) adminDialog.close();
+          if (peopleDialog.open) peopleDialog.close();
+          if (shareDialog.open) shareDialog.close();
           document.getElementById('admin-open').hidden = true;
           Appearance.reset();
           setAuthMode('signin');
@@ -2453,7 +2667,7 @@ import { nextOccurrence, describe as describeRule, isRepeating } from './recur.j
         currentUid = user.uid;
         showUser(user);
         show('boot');
-        Store.start(user.uid, scheduleRender, fail).then(function () {
+        Store.start(user.uid, scheduleRender, fail, user.email, user.displayName).then(function () {
           load();
           show('app');
           showTab(location.hash.slice(1) || 'home', true);

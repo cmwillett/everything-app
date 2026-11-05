@@ -123,7 +123,7 @@ self.addEventListener('push', (event) => {
     // Tell the server it was shown, so it doesn't send the backup email.
     if (diag.hasAck && diag.shown) {
       diag.ack = await sendAck(d);
-      if (!diag.ack.ok) diag.pending = { url: d.ackUrl, uid: d.uid, rid: d.reminderId, key: d.ackKey };
+      if (!diag.ack.ok) diag.pending = { url: d.ackUrl, uid: d.uid, rid: d.reminderId, key: d.ackKey, s: d.s || '' };
     }
     await saveDiag(diag);
   })());
@@ -131,14 +131,14 @@ self.addEventListener('push', (event) => {
 
 // Try a normal request first (we can see if it worked), then a simpler one.
 async function sendAck(d) {
-  const body = JSON.stringify({ uid: d.uid, rid: d.reminderId, key: d.ackKey });
+  const body = JSON.stringify({ uid: d.uid, rid: d.reminderId, key: d.ackKey, s: d.s || '' });
   try {
     const res = await fetch(d.ackUrl, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body });
     if (res.ok || res.status === 204) return { ok: true, how: 'post', status: res.status };
     if (res.status === 404) return { ok: false, how: 'post', status: 404, note: 'server did not recognise this reminder' };
   } catch (e) { /* fall through */ }
   try {
-    const q = '?uid=' + encodeURIComponent(d.uid) + '&rid=' + encodeURIComponent(d.reminderId) + '&key=' + encodeURIComponent(d.ackKey);
+    const q = '?uid=' + encodeURIComponent(d.uid) + '&rid=' + encodeURIComponent(d.reminderId) + '&key=' + encodeURIComponent(d.ackKey) + '&s=' + encodeURIComponent(d.s || '');
     await fetch(d.ackUrl + q, { method: 'GET', mode: 'no-cors' });
     return { ok: true, how: 'get' };
   } catch (e) {

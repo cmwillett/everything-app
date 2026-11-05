@@ -59,8 +59,8 @@ function escapeHtml(t) {
   return String(t == null ? '' : t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-async function emailReminder(userRef, r, why) {
-  const user = await getAuth().getUser(userRef.id).catch(() => null);
+async function emailReminder(uid, r, why) {
+  const user = await getAuth().getUser(uid).catch(() => null);
   const to = user && user.email;
   if (!to) return { ok: false, note: 'no email address on the account' };
   // lastDueAtMs: a repeating reminder's dueAtMs has already moved on to next time.
@@ -102,10 +102,75 @@ async function scheduleNext(doc, r, now) {
   return true;
 }
 
-async function reminderEmailMode(userRef) {
-  const snap = await userRef.collection('meta').doc('settings').get().catch(() => null);
+async function reminderEmailMode(uid) {
+  const snap = await db.collection('users').doc(uid).collection('meta').doc('settings').get().catch(() => null);
   const mode = snap && snap.exists ? snap.data().reminderEmail : null;
   return mode === 'always' || mode === 'off' ? mode : 'backup';
+}
+
+/*
+ * Reminders live in two places: users/{uid}/reminders (private) and
+ * shared/{id} with table 'reminders' (shared with the uids in `members`).
+ * Each person it's for gets their own push, their own "shown" confirmation
+ * (ackKeys.{uid}) and their own backup email; receipts are in deliveries.{uid}.
+ */
+function isShared(doc) { return doc.ref.parent.id === 'shared'; }
+function recipientsOf(doc, r) {
+  if (isShared(doc)) return Array.isArray(r.members) ? r.members.filter((u) => typeof u === 'string') : [];
+  const userRef = doc.ref.parent.parent;
+  return userRef ? [userRef.id] : [];
+}
+
+async function dueReminders(field, now) {
+  const [own, shared] = await Promise.all([
+    db.collectionGroup('reminders').where(field, '<=', now).orderBy(field).limit(BATCH_LIMIT).get(),
+    db.collection('shared').where(field, '<=', now).orderBy(field).limit(BATCH_LIMIT).get()
+  ]);
+  return own.docs.concat(shared.docs.filter((d) => d.data().table === 'reminders'));
+}
+
+function cleanupFields() {
+  // Older single-person receipt fields; replaced by deliveries/ackKeys.
+  return { delivery: FieldValue.delete(), ackKey: FieldValue.delete(), ackedAt: FieldValue.delete(),
+    emailedAt: FieldValue.delete(), deliveryNote: FieldValue.delete(), pushedTo: FieldValue.delete() };
+}
+
+async function pushTo(uid, r, doc, ackKey, tokensByUser) {
+  const userRef = db.collection('users').doc(uid);
+  if (!tokensByUser.has(uid)) {
+    const devices = await userRef.collection('devices').get();
+    tokensByUser.set(uid, devices.docs.map((d) => d.id));
+  }
+  const tokens = tokensByUser.get(uid);
+  if (!tokens.length) return { devices: 0, success: 0 };
+  const res = await getMessaging().sendEachForMulticast({
+    tokens,
+    data: {
+      title: String(r.title || 'Reminder').slice(0, 200),
+      body: String(r.description || '').slice(0, 1000),
+      reminderId: doc.id,
+      dueAtMs: String(r.dueAtMs || ''),
+      uid,
+      ackKey,
+      ackUrl: ACK_URL,
+      s: isShared(doc) ? '1' : ''
+    },
+    webpush: { headers: { Urgency: 'high', TTL: '86400' } }
+  });
+  // Drop devices that have been uninstalled or had notifications revoked.
+  const dead = [];
+  res.responses.forEach((resp, i) => {
+    if (resp.success) return;
+    const code = String((resp.error && (resp.error.code || resp.error.message)) || '');
+    if (/not-registered|invalid-registration|registration-token|unregistered|invalid-argument/i.test(code)) dead.push(tokens[i]);
+    else logger.warn('Push failed', { code });
+  });
+  for (const t of dead) await userRef.collection('devices').doc(t).delete().catch(() => {});
+  if (dead.length) {
+    tokensByUser.set(uid, tokens.filter((t) => !dead.includes(t)));
+    logger.warn('Removed devices that no longer accept notifications', { user: uid, count: dead.length });
+  }
+  return { devices: tokens.length, success: res.successCount };
 }
 
 export const sendDueReminders = onSchedule(
@@ -122,133 +187,98 @@ export const sendDueReminders = onSchedule(
     const now = Date.now();
     await sendBackupEmails(now);
     // nextAtMs only exists on reminders still waiting to go out.
-    const due = await db.collectionGroup('reminders')
-      .where('nextAtMs', '<=', now)
-      .orderBy('nextAtMs')
-      .limit(BATCH_LIMIT)
-      .get();
-    if (due.empty) return;
+    const due = await dueReminders('nextAtMs', now);
+    if (!due.length) return;
 
     const tokensByUser = new Map();
     let sent = 0;
 
-    for (const doc of due.docs) {
-      const userRef = doc.ref.parent.parent;           // users/{uid}
-      if (!userRef) continue;
+    for (const doc of due) {
       const r = doc.data();
+      const people = recipientsOf(doc, r);
+      if (!people.length) continue;
 
       // Claim it first, so a slow run can't send the same reminder twice.
-      const ackKey = randomBytes(12).toString('hex');
+      const ackKeys = {};
+      const deliveries = {};
+      people.forEach((uid) => { ackKeys[uid] = randomBytes(12).toString('hex'); deliveries[uid] = { state: 'sending' }; });
       try {
-        await doc.ref.update(
+        await doc.ref.update(Object.assign(
           { nextAtMs: FieldValue.delete(), status: 'sent', sentAt: new Date().toISOString(),
-            delivery: 'sending', ackKey, lastDueAtMs: Number(r.dueAtMs) || now,
-            // Fresh receipt for this occurrence (a repeating reminder reuses the record).
-            ackedAt: FieldValue.delete(), emailedAt: FieldValue.delete(), deliveryNote: FieldValue.delete(),
-            pushedTo: FieldValue.delete(), emailDueMs: FieldValue.delete() },
-          { lastUpdateTime: doc.updateTime }
-        );
+            lastDueAtMs: Number(r.dueAtMs) || now, ackKeys, deliveries,
+            emailPending: FieldValue.delete(), emailDueMs: FieldValue.delete() },
+          cleanupFields()), { lastUpdateTime: doc.updateTime });
       } catch (e) {
         continue; // changed or deleted since we read it — next run will see the new state
       }
 
       if (now - Number(r.dueAtMs || r.nextAtMs) > STALE_AFTER_MS) {
-        await doc.ref.update({ delivery: 'skipped', deliveryNote: 'more than a day late' }).catch(() => {});
+        const skipped = {};
+        people.forEach((uid) => { skipped[uid] = { state: 'skipped', note: 'more than a day late' }; });
+        await doc.ref.update({ deliveries: skipped }).catch(() => {});
         await scheduleNext(doc, r, now).catch((e) => logger.error('Could not schedule next', { message: e.message }));
         continue;
       }
 
-      const mode = await reminderEmailMode(userRef);
-      if (!tokensByUser.has(userRef.id)) {
-        const devices = await userRef.collection('devices').get();
-        tokensByUser.set(userRef.id, devices.docs.map((d) => d.id));
-      }
-      const tokens = tokensByUser.get(userRef.id);
-
-      let successCount = 0;
-      if (tokens.length) {
-        const res = await getMessaging().sendEachForMulticast({
-          tokens,
-          data: {
-            title: String(r.title || 'Reminder').slice(0, 200),
-            body: String(r.description || '').slice(0, 1000),
-            reminderId: doc.id,
-            dueAtMs: String(r.dueAtMs || ''),
-            uid: userRef.id,
-            ackKey,
-            ackUrl: ACK_URL
-          },
-          webpush: { headers: { Urgency: 'high', TTL: '86400' } }
-        });
-        successCount = res.successCount;
-        sent += res.successCount;
-
-        // Drop devices that have been uninstalled or had notifications revoked.
-        const dead = [];
-        res.responses.forEach((resp, i) => {
-          if (resp.success) return;
-          const code = String((resp.error && (resp.error.code || resp.error.message)) || '');
-          if (/not-registered|invalid-registration|registration-token|unregistered|invalid-argument/i.test(code)) dead.push(tokens[i]);
-          else logger.warn('Push failed', { code });
-        });
-        for (const t of dead) {
-          await userRef.collection('devices').doc(t).delete().catch(() => {});
+      const pending = [];
+      for (const uid of people) {
+        const mode = await reminderEmailMode(uid);
+        const push = await pushTo(uid, r, doc, ackKeys[uid], tokensByUser);
+        sent += push.success;
+        let d;
+        if (mode === 'always') {
+          const mail = await emailReminder(uid, r, 'You asked for every reminder by email too.');
+          d = push.success ? { state: 'pushed', emailed: mail.ok } : (mail.ok ? { state: 'emailed', note: 'no phone could get the notification' } : { state: 'failed', note: mail.note });
+        } else if (push.success) {
+          d = { state: 'pushed' };
+          // Email as a backup unless a phone confirms it showed the reminder.
+          if (mode === 'backup') pending.push(uid);
+        } else if (mode === 'backup') {
+          const mail = await emailReminder(uid, r, 'Sent by email because no phone could get the notification.');
+          d = mail.ok ? { state: 'emailed', note: 'no phone could get the notification' } : { state: 'failed', note: mail.note };
+        } else {
+          d = { state: 'failed', note: 'no phone has notifications on' };
         }
-        if (dead.length) {
-          tokensByUser.set(userRef.id, tokens.filter((t) => !dead.includes(t)));
-          logger.warn('Removed devices that no longer accept notifications', { user: userRef.id, count: dead.length });
-        }
+        deliveries[uid] = d;
+        logger.info('Reminder', { user: uid, reminder: doc.id, shared: isShared(doc), devices: push.devices, pushed: push.success, delivery: d.state });
       }
-
-      const update = { pushedTo: successCount };
-      if (mode === 'always') {
-        const mail = await emailReminder(userRef, r, 'You asked for every reminder by email too.');
-        update.emailedAt = mail.ok ? new Date().toISOString() : FieldValue.delete();
-        update.delivery = successCount ? 'pushed' : (mail.ok ? 'emailed' : 'failed');
-        if (!mail.ok) update.deliveryNote = mail.note;
-      } else if (successCount) {
-        update.delivery = 'pushed';
-        // Email as a backup unless a phone confirms it showed the reminder.
-        if (mode === 'backup') update.emailDueMs = Date.now() + CONFIRM_WITHIN_MS;
-      } else if (mode === 'backup') {
-        const mail = await emailReminder(userRef, r, 'Sent by email because no phone could get the notification.');
-        update.delivery = mail.ok ? 'emailed' : 'failed';
-        update.deliveryNote = mail.ok ? 'no phone could get the notification' : mail.note;
-        if (mail.ok) update.emailedAt = new Date().toISOString();
-      } else {
-        update.delivery = 'failed';
-        update.deliveryNote = 'no phone has notifications on';
-      }
-      await doc.ref.update(update).catch(() => {});
-      const repeats = await scheduleNext(doc, r, now).catch((e) => { logger.error('Could not schedule next', { message: e.message }); return false; });
-      logger.info('Reminder', { user: userRef.id, reminder: doc.id, devices: tokens.length, pushed: successCount, delivery: update.delivery, repeats });
+      // A phone may already have confirmed while we were sending — keep that.
+      await db.runTransaction(async (tx) => {
+        const snap = await tx.get(doc.ref);
+        if (!snap.exists) return;
+        const cur = snap.data().deliveries || {};
+        const merged = {};
+        people.forEach((uid) => { merged[uid] = cur[uid] && cur[uid].state === 'shown' ? cur[uid] : deliveries[uid]; });
+        const stillPending = pending.filter((uid) => merged[uid].state !== 'shown');
+        tx.update(doc.ref, Object.assign({ deliveries: merged },
+          stillPending.length ? { emailPending: stillPending, emailDueMs: Date.now() + CONFIRM_WITHIN_MS } : {}));
+      }).catch((e) => logger.error('Could not save receipts', { message: e.message }));
+      await scheduleNext(doc, r, now).catch((e) => logger.error('Could not schedule next', { message: e.message }));
     }
-    logger.info('Reminders processed', { due: due.size, notificationsSent: sent });
+    logger.info('Reminders processed', { due: due.length, notificationsSent: sent });
   }
 );
 
-
 // Pushed reminders no phone has confirmed in time get emailed.
 async function sendBackupEmails(now) {
-  const late = await db.collectionGroup('reminders')
-    .where('emailDueMs', '<=', now)
-    .orderBy('emailDueMs')
-    .limit(BATCH_LIMIT)
-    .get();
-  for (const doc of late.docs) {
-    const userRef = doc.ref.parent.parent;
-    if (!userRef) continue;
+  const late = await dueReminders('emailDueMs', now);
+  for (const doc of late) {
     // Claim it, so it can only be emailed once.
     try {
-      await doc.ref.update({ emailDueMs: FieldValue.delete() }, { lastUpdateTime: doc.updateTime });
+      await doc.ref.update({ emailDueMs: FieldValue.delete(), emailPending: FieldValue.delete() }, { lastUpdateTime: doc.updateTime });
     } catch (e) { continue; }
     const r = doc.data();
-    if (r.ackedAt) continue;
-    const mail = await emailReminder(userRef, r, 'Sent by email because your phone didn\u2019t confirm the notification.');
-    await doc.ref.update(mail.ok
-      ? { delivery: 'emailed', emailedAt: new Date().toISOString(), deliveryNote: 'your phone didn\u2019t confirm the notification' }
-      : { delivery: 'unconfirmed', deliveryNote: mail.note }).catch(() => {});
-    logger.warn('Reminder not confirmed by a phone', { user: userRef.id, reminder: doc.id, emailed: mail.ok });
+    const deliveries = r.deliveries || {};
+    const update = {};
+    for (const uid of (Array.isArray(r.emailPending) ? r.emailPending : [])) {
+      if (deliveries[uid] && deliveries[uid].state === 'shown') continue;
+      const mail = await emailReminder(uid, r, 'Sent by email because your phone didn’t confirm the notification.');
+      update['deliveries.' + uid] = mail.ok
+        ? { state: 'emailed', note: 'your phone didn’t confirm the notification' }
+        : { state: 'unconfirmed', note: mail.note };
+      logger.warn('Reminder not confirmed by a phone', { user: uid, reminder: doc.id, emailed: mail.ok });
+    }
+    if (Object.keys(update).length) await doc.ref.update(update).catch(() => {});
   }
 }
 
@@ -263,28 +293,30 @@ export const ackReminder = onRequest({ memory: '256MiB', timeoutSeconds: 10, max
   b = b || {};
   if (req.method === 'GET' && !b.key) { res.status(405).send(''); return; }   // a browser visit
   const uid = String(b.uid || ''), rid = String(b.rid || ''), key = String(b.key || '');
+  const shared = String(b.s || '') === '1';
   if (!/^[\w-]{1,128}$/.test(uid) || !/^[\w-]{1,128}$/.test(rid) || !/^[0-9a-f]{24}$/.test(key)) {
     logger.warn('Ack rejected: bad request', { method: req.method, uid: uid.slice(0, 40), rid: rid.slice(0, 60), keyLen: key.length });
     res.status(400).send(''); return;
   }
-  const ref = db.collection('users').doc(uid).collection('reminders').doc(rid);
+  const ref = shared ? db.collection('shared').doc(rid) : db.collection('users').doc(uid).collection('reminders').doc(rid);
   try {
     await db.runTransaction(async (tx) => {
       const snap = await tx.get(ref);
-      if (!snap.exists || snap.data().ackKey !== key) throw new Error('mismatch');
-      const d = snap.data();
-      tx.update(ref, {
-        ackedAt: new Date().toISOString(),
-        emailDueMs: FieldValue.delete(),
+      const d = snap.exists ? snap.data() : null;
+      if (!d || !d.ackKeys || d.ackKeys[uid] !== key) throw new Error('mismatch');
+      const prev = (d.deliveries || {})[uid] || {};
+      const pending = (Array.isArray(d.emailPending) ? d.emailPending : []).filter((u) => u !== uid);
+      tx.update(ref, Object.assign({
         // Keep "emailed" if the backup already went out (phone was very late).
-        delivery: d.delivery === 'emailed' ? 'emailed' : 'shown',
-        deliveryNote: d.delivery === 'emailed' ? 'your phone showed it late, after the email' : FieldValue.delete()
-      });
+        ['deliveries.' + uid]: prev.state === 'emailed'
+          ? { state: 'emailed', note: 'your phone showed it late, after the email' }
+          : { state: 'shown', at: new Date().toISOString() }
+      }, pending.length ? { emailPending: pending } : { emailPending: FieldValue.delete(), emailDueMs: FieldValue.delete() }));
     });
-    logger.info('Ack received', { method: req.method, user: uid, reminder: rid });
+    logger.info('Ack received', { method: req.method, user: uid, reminder: rid, shared });
     res.status(204).send('');
   } catch (e) {
-    logger.warn('Ack rejected', { method: req.method, user: uid, reminder: rid, why: e.message });
+    logger.warn('Ack rejected', { method: req.method, user: uid, reminder: rid, shared, why: e.message });
     res.status(404).send('');
   }
 });
@@ -342,6 +374,7 @@ export const adminStats = onCall({ memory: '256MiB', timeoutSeconds: 60, maxInst
     });
     const [tasks, notes, reminders, links] = await Promise.all(
       ['tasks', 'notes', 'reminders', 'links'].map(totalAndToday));
+    const sharedCount = await count(db.collection('shared').where('members', 'array-contains', u.uid));
     const [tasksInToday, tasksDone, tasksArchived, lists, remindersUpcoming, devices] = await Promise.all([
       count(col('tasks').where('today', '==', true)),
       count(col('tasks').where('status', '==', 'Done')),
@@ -362,7 +395,8 @@ export const adminStats = onCall({ memory: '256MiB', timeoutSeconds: 60, maxInst
       notes: Object.assign(notes, { lists: lists }),
       reminders: Object.assign(reminders, { upcoming: remindersUpcoming }),
       links,
-      devices
+      devices,
+      shared: sharedCount
     };
   }));
 

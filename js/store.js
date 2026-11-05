@@ -32,7 +32,10 @@ const TABLE_NAMES = Object.keys(TABLES);
 
 let fb = null;            // { auth, db, a: authModule, f: firestoreModule }
 let uid = null;
-let mirror = empty();
+let mirror = empty();          // your own items
+let sharedMirror = empty();    // items shared with you (or by you)
+let invites = { out: [], in: [] };
+let me = { email: '', name: '' };
 let settings = {};
 let unsubs = [];
 let changeHandler = function () {};
@@ -121,10 +124,29 @@ function normalizeRecord(table, row, fallbackOrder) {
     if (row[f] !== undefined && row[f] !== null) rec[f] = String(row[f]);
   });
   if (table === 'reminders' && !rec.status) rec.status = 'pending';
+  // Server-written receipts: { uid: { state, note } } for each person it's for.
+  if (row.deliveries && typeof row.deliveries === 'object') rec.deliveries = JSON.parse(JSON.stringify(row.deliveries));
+  // Sharing details (only on items in the shared collection).
+  if (Array.isArray(row.members)) {
+    rec.shared = true;
+    rec.owner = String(row.owner || '');
+    rec.members = row.members.map(String);
+    rec.memberInfo = row.memberInfo && typeof row.memberInfo === 'object' ? JSON.parse(JSON.stringify(row.memberInfo)) : {};
+  }
   return rec;
 }
 
-function sorted(table) { return mirror[table].slice().sort(function (a, b) { return a.sortOrder - b.sortOrder; }); }
+function all(table) { return mirror[table].concat(sharedMirror[table]); }
+function sorted(table) { return all(table).sort(function (a, b) { return a.sortOrder - b.sortOrder; }); }
+function find(table, id) { return all(table).filter(function (i) { return i.id === id; })[0] || null; }
+function sharedRef(id) { return fb.f.doc(fb.db, 'shared', id); }
+// Where an item lives: your own space, or the shared collection.
+function refFor(table, item) { return item && item.shared ? sharedRef(item.id) : ref(table, item.id); }
+function nameFromEmail(email) {
+  const n = String(email || '').split('@')[0].split(/[._+-]/)[0];
+  return n ? n.charAt(0).toUpperCase() + n.slice(1) : '';
+}
+function myName() { return me.name || nameFromEmail(me.email) || 'Someone'; }
 
 /* ------------------------------------------------------- firestore -- */
 function col(table) { return fb.f.collection(fb.db, 'users', uid, table); }
@@ -135,6 +157,8 @@ function settingsRef() { return fb.f.doc(fb.db, 'users', uid, 'meta', 'settings'
 function body(table, rec) {
   const o = Object.assign({}, rec);
   delete o.id;
+  delete o.shared;       // worked out on load, not stored
+  delete o.deliveries;   // written by the server only
   if (table === 'reminders' && rec.status === 'pending') o.nextAtMs = rec.dueAtMs;
   return o;
 }
@@ -190,15 +214,18 @@ export const Store = {
   // Resolves once every collection has delivered its first snapshot (from
   // the device cache if offline). After that, onChange fires on every update
   // from any device.
-  start(userId, onChange, onError) {
+  start(userId, onChange, onError, email, name) {
     this.stop();
     uid = userId;
+    me = { email: String(email || '').toLowerCase(), name: String(name || '') };
     mirror = empty();
+    sharedMirror = empty();
+    invites = { out: [], in: [] };
     settings = {};
     changeHandler = onChange || changeHandler;
     if (onError) errorHandler = onError;
     return new Promise(function (resolve) {
-      const pending = new Set(TABLE_NAMES.concat(['settings']));
+      const pending = new Set(TABLE_NAMES.concat(['settings', 'shared', 'invitesOut', 'invitesIn']));
       function arrived(name) {
         if (pending.has(name)) { pending.delete(name); if (!pending.size) resolve(); }
         else changeHandler(name);
@@ -211,6 +238,29 @@ export const Store = {
           arrived(table);
         }, function (e) { errorHandler(e); arrived(table); }));
       });
+      // Everything shared with you (and by you).
+      unsubs.push(fb.f.onSnapshot(fb.f.query(fb.f.collection(fb.db, 'shared'), fb.f.where('members', 'array-contains', uid)), function (snap) {
+        const next = empty();
+        snap.docs.forEach(function (d, i) {
+          const data = d.data();
+          if (!TABLES[data.table]) return;
+          next[data.table].push(normalizeRecord(data.table, Object.assign({ id: d.id }, data), i));
+        });
+        sharedMirror = next;
+        arrived('shared');
+      }, function (e) { errorHandler(e); arrived('shared'); }));
+      // Connection requests you've sent, and ones sent to you.
+      const inviteCol = fb.f.collection(fb.db, 'invites');
+      unsubs.push(fb.f.onSnapshot(fb.f.query(inviteCol, fb.f.where('fromUid', '==', uid)), function (snap) {
+        invites.out = snap.docs.map(function (d) { return Object.assign({ id: d.id }, d.data()); });
+        arrived('invitesOut');
+      }, function (e) { errorHandler(e); arrived('invitesOut'); }));
+      if (me.email) {
+        unsubs.push(fb.f.onSnapshot(fb.f.query(inviteCol, fb.f.where('toEmail', '==', me.email)), function (snap) {
+          invites.in = snap.docs.map(function (d) { return Object.assign({ id: d.id }, d.data()); });
+          arrived('invitesIn');
+        }, function (e) { errorHandler(e); arrived('invitesIn'); }));
+      } else arrived('invitesIn');
       unsubs.push(fb.f.onSnapshot(settingsRef(), function (snap) {
         settings = snap.exists() ? snap.data() : {};
         arrived('settings');
@@ -223,6 +273,8 @@ export const Store = {
     unsubs = [];
     uid = null;
     mirror = empty();
+    sharedMirror = empty();
+    invites = { out: [], in: [] };
     settings = {};
   },
 
@@ -236,7 +288,8 @@ export const Store = {
   create(table, values) {
     assertTable(table); assertSignedIn();
     const list = mirror[table];
-    const top = list.length ? Math.min.apply(null, list.map(function (i) { return i.sortOrder; })) - 1 : 0;
+    const every = all(table);
+    const top = every.length ? Math.min.apply(null, every.map(function (i) { return i.sortOrder; })) - 1 : 0;
     const now = new Date().toISOString();
     const rec = normalizeRecord(table, Object.assign({}, values, { id: uuid(), sortOrder: top, created: now, updated: now }));
     list.push(rec);
@@ -246,7 +299,7 @@ export const Store = {
 
   update(table, id, values) {
     assertTable(table); assertSignedIn();
-    const item = mirror[table].filter(function (i) { return i.id === id; })[0];
+    const item = find(table, id);
     if (!item) throw new Error('That item no longer exists — it may have been deleted on another device.');
     const clean = sanitize(table, values || {});
     clean.updated = new Date().toISOString();
@@ -257,21 +310,117 @@ export const Store = {
       write.status = 'pending';
       write.nextAtMs = clean.dueAtMs;
       // (lastSentAt / lastDueAtMs stay: they describe the previous time it went off.)
-      ['sentAt', 'delivery', 'deliveryNote', 'pushedTo', 'emailedAt', 'ackedAt', 'ackKey', 'emailDueMs'].forEach(function (f) {
+      ['sentAt', 'delivery', 'deliveryNote', 'pushedTo', 'emailedAt', 'ackedAt', 'ackKey', 'emailDueMs',
+        'deliveries', 'ackKeys', 'emailPending'].forEach(function (f) {
         write[f] = fb.f.deleteField();
         delete item[f];
       });
     }
     Object.assign(item, clean);
-    send(fb.f.setDoc(ref(table, id), write, { merge: true }));
+    send(fb.f.setDoc(refFor(table, item), write, { merge: true }));
     return clone(item);
   },
 
   remove(table, id) {
     assertTable(table); assertSignedIn();
+    const item = find(table, id);
+    if (item && item.shared && item.owner !== uid) return this.leave(table, id);
     mirror[table] = mirror[table].filter(function (i) { return i.id !== id; });
-    send(fb.f.deleteDoc(ref(table, id)));
+    sharedMirror[table] = sharedMirror[table].filter(function (i) { return i.id !== id; });
+    send(fb.f.deleteDoc(item ? refFor(table, item) : ref(table, id)));
     return true;
+  },
+
+  /* ---- sharing ---- */
+  myUid() { return uid; },
+
+  // Share an item with these people (uids of your connections). An empty
+  // list un-shares it (owner only), moving it back into your own space.
+  setSharing(table, id, uids) {
+    assertTable(table); assertSignedIn();
+    const item = find(table, id);
+    if (!item) throw new Error('That item no longer exists.');
+    if (item.shared && item.owner !== uid) throw new Error('Only the person who made it can change who it\u2019s shared with.');
+    const people = this.connections();
+    const others = uids.filter(function (u) { return u !== uid && people.some(function (p) { return p.uid === u; }); });
+    const info = {};
+    info[uid] = { name: myName(), email: me.email };
+    people.forEach(function (p) { if (others.indexOf(p.uid) !== -1) info[p.uid] = { name: p.name, email: p.email }; });
+    const batch = fb.f.writeBatch(fb.db);
+    if (!item.shared && others.length) {
+      const rec = Object.assign({}, item, { owner: uid, members: [uid].concat(others), memberInfo: info });
+      batch.set(sharedRef(id), Object.assign(body(table, rec), { table: table }));
+      batch.delete(ref(table, id));
+      mirror[table] = mirror[table].filter(function (i) { return i.id !== id; });
+      rec.shared = true;
+      sharedMirror[table].push(rec);
+    } else if (item.shared && others.length) {
+      batch.set(sharedRef(id), { members: [uid].concat(others), memberInfo: info }, { merge: true });
+      item.members = [uid].concat(others);
+      item.memberInfo = info;
+    } else if (item.shared && !others.length) {
+      const rec = Object.assign({}, item);
+      delete rec.owner; delete rec.members; delete rec.memberInfo; delete rec.shared;
+      const data = body(table, rec);
+      delete data.table;
+      batch.set(ref(table, id), data);
+      batch.delete(sharedRef(id));
+      sharedMirror[table] = sharedMirror[table].filter(function (i) { return i.id !== id; });
+      mirror[table].push(rec);
+    } else {
+      return true;
+    }
+    send(batch.commit());
+    return true;
+  },
+
+  // Take yourself off something someone else shared with you.
+  leave(table, id) {
+    assertTable(table); assertSignedIn();
+    sharedMirror[table] = sharedMirror[table].filter(function (i) { return i.id !== id; });
+    send(fb.f.updateDoc(sharedRef(id), { members: fb.f.arrayRemove(uid) }));
+    return true;
+  },
+
+  /* ---- connections ---- */
+  invitesIn() { return clone(invites.in.filter(function (i) { return i.status === 'pending'; })); },
+  invitesOut() { return clone(invites.out.filter(function (i) { return i.status === 'pending'; })); },
+  connections() {
+    const seen = {};
+    const out = [];
+    invites.out.forEach(function (i) {
+      if (i.status !== 'accepted' || !i.toUid || seen[i.toUid]) return;
+      seen[i.toUid] = true;
+      out.push({ uid: i.toUid, name: i.toName || nameFromEmail(i.toEmail), email: i.toEmail, inviteId: i.id });
+    });
+    invites.in.forEach(function (i) {
+      if (i.status !== 'accepted' || !i.fromUid || seen[i.fromUid]) return;
+      seen[i.fromUid] = true;
+      out.push({ uid: i.fromUid, name: i.fromName || nameFromEmail(i.fromEmail), email: i.fromEmail, inviteId: i.id });
+    });
+    return out.sort(function (a, b) { return a.name.localeCompare(b.name); });
+  },
+  invite(email) {
+    assertSignedIn();
+    const to = String(email || '').trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) throw new Error('That doesn\u2019t look like an email address.');
+    if (to === me.email) throw new Error('That\u2019s your own email address.');
+    if (invites.out.some(function (i) { return i.toEmail === to && i.status !== 'declined'; })) throw new Error('You\u2019ve already invited ' + to + '.');
+    if (invites.in.some(function (i) { return i.fromEmail && i.fromEmail.toLowerCase() === to && i.status === 'accepted'; })) throw new Error('You\u2019re already connected.');
+    return fb.f.addDoc(fb.f.collection(fb.db, 'invites'), {
+      fromUid: uid, fromName: myName(), fromEmail: me.email, toEmail: to,
+      status: 'pending', created: new Date().toISOString()
+    });
+  },
+  respond(inviteId, accept) {
+    assertSignedIn();
+    return fb.f.updateDoc(fb.f.doc(fb.db, 'invites', inviteId), {
+      status: accept ? 'accepted' : 'declined', toUid: uid, toName: myName(), respondedAt: new Date().toISOString()
+    });
+  },
+  removeInvite(inviteId) {
+    assertSignedIn();
+    return fb.f.deleteDoc(fb.f.doc(fb.db, 'invites', inviteId));
   },
 
   reorder(table, orderedIds) {
@@ -279,11 +428,12 @@ export const Store = {
     const rank = {};
     orderedIds.forEach(function (id, i) { rank[id] = i; });
     const ops = [];
-    mirror[table].forEach(function (item) {
+    all(table).forEach(function (item) {
       const next = Object.prototype.hasOwnProperty.call(rank, item.id) ? rank[item.id] : orderedIds.length;
       if (item.sortOrder === next) return;
       item.sortOrder = next;
-      ops.push(function (batch) { batch.set(ref(table, item.id), { sortOrder: next }, { merge: true }); });
+      const where = refFor(table, item);
+      ops.push(function (batch) { batch.set(where, { sortOrder: next }, { merge: true }); });
     });
     if (ops.length) send(commitInBatches(ops));
     return true;
@@ -324,7 +474,8 @@ export const Store = {
     const counts = {};
     TABLE_NAMES.forEach(function (table) {
       mirror[table].forEach(function (item) { ops.push(function (b) { b.delete(ref(table, item.id)); }); });
-      const rows = (Array.isArray(data[table]) ? data[table] : []).map(function (row, i) {
+      // Shared items belong to everyone they're shared with; a backup restores only your own.
+      const rows = (Array.isArray(data[table]) ? data[table] : []).filter(function (row) { return row && !row.shared && !Array.isArray(row.members); }).map(function (row, i) {
         const rec = normalizeRecord(table, row, i);
         // Don't fire a pile of old reminders the moment a backup is restored.
         if (table === 'reminders' && rec.status === 'pending' && rec.dueAtMs < Date.now()) rec.status = 'sent';
